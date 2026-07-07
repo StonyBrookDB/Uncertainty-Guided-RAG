@@ -34,7 +34,7 @@ client.create_collection(
 print("Created collection MedRAG_collection")
 
 # Transformation and data processing
-model = SentenceTransformer("Alibaba-NLP/gte-base-en-v1.5", trust_remote_code=True, device="cpu")
+embedding_model = SentenceTransformer("Alibaba-NLP/gte-base-en-v1.5", trust_remote_code=True, device="auto")
 
 def insert_batch(chunks, source):
     embeddings = model.encode(chunks, normalize_embeddings=True).tolist()

@@ -1,14 +1,23 @@
+from pymilvus import MilvusClient
 import ast
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import pandas as pd
 import time as t
+from sentence_transformers import SentenceTransformer
 
+# Milvus connect
+client = MilvusClient(uri="http://localhost:19530")
+
+# AI Model
 # model_name = "meta-llama/Llama-3.1-8B-Instruct"
 model_name = "mistralai/Mistral-7B-Instruct-v0.3"
-tokenizer = AutoTokenizer.from_pretrained(model_name, dtype=torch.float16, device_map="auto")
-model = AutoModelForCausalLM.from_pretrained(model_name, dtype=torch.float16, device_map="auto")
+tokenizer = AutoTokenizer.from_pretrained(model_name, device_map="auto")
+model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto")
 model.eval()
+
+# Embedding model
+embedding_model = SentenceTransformer("Alibaba-NLP/gte-base-en-v1.5", trust_remote_code=True, device="auto")
 
 # Map options to token IDs
 option_tokens = {"A": tokenizer.encode(" A", add_special_tokens=False)[0],
@@ -17,12 +26,9 @@ option_tokens = {"A": tokenizer.encode(" A", add_special_tokens=False)[0],
                  "D": tokenizer.encode(" D", add_special_tokens=False)[0]}
 
 # Keys: ["id", "question", "opa", "opb", "opc", "opd", "cop", "choice_type", "exp", "subject_name", "topic_name"]
-def eval_medmcqa(q): # [probA, probB, probC, probD]
+def eval_medmcqa(q): # [probA, probB, probC, probD, time, search_results]
 
     prompt = f"""
-        You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
-        The question is provided below, along with four answer options labeled A, B, C, and D. 
-        Your goal is to select the most appropriate answer based on your medical knowledge and reasoning. 
         Question: {q["question"]}
         A) {q["opa"]}
         B) {q["opb"]}
@@ -31,6 +37,21 @@ def eval_medmcqa(q): # [probA, probB, probC, probD]
         Answer only with the letter of the correct option. Answer: """
     
     start = t.time()
+    query_embedding = embedding_model.encode(prompt, normalize_embeddings=True, device="auto").tolist() # 
+    search_results = client.search(
+        collection_name="MedRAG_collection",
+        query_embeddings=query_embedding,
+        top_k=5,
+        output_fields=["id", "source", "content"],
+        metric_type="COSINE",
+        anns_field = "vector"
+    )
+
+    prompt = """ You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
+        The question is provided below, along with four answer options labeled A, B, C, and D. 
+        Your goal is to select the most appropriate answer based on your medical knowledge and reasoning, as well as any additional context provided. 
+        """ + "\n\n".join([f"{r.entity.get('content')}" for r in search_results[0]]) + prompt
+
     inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
     with torch.no_grad():
         outputs = model(**inputs, return_dict=True)
@@ -54,15 +75,12 @@ def eval_medmcqa(q): # [probA, probB, probC, probD]
     #     generated = model.generate(**inputs,max_new_tokens=5)
     # print(tokenizer.decode(generated[0], skip_special_tokens=True))
 
-    return torch.softmax(option_logits, dim=0).tolist() + [end - start]
+    return torch.softmax(option_logits, dim=0).tolist() + [end - start] + [search_results[0]]
 
 # Keys: ["centerpiece", "options", "correct_options", "correct_options_idx", "correct_options_literal", "subject", "id"]
-def eval_mmlu(q): # [probA, probB, probC, probD]
+def eval_mmlu(q): # [probA, probB, probC, probD, time, search_results]
     options = ast.literal_eval(q["options"])
     prompt = f"""
-        You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
-        The question is provided below, along with four answer options labeled A, B, C, and D. 
-        Your goal is to select the most appropriate answer based on your medical knowledge and reasoning
         Question: {q["centerpiece"]}
         A) {options[0]}
         B) {options[1]}
@@ -70,6 +88,21 @@ def eval_mmlu(q): # [probA, probB, probC, probD]
         D) {options[3]}
         Answer only with the letter of the correct option. Answer: """
     start = t.time()
+    query_embedding = embedding_model.encode(prompt, normalize_embeddings=True, device="auto").tolist() # 
+    search_results = client.search(
+        collection_name="MedRAG_collection",
+        query_embeddings=query_embedding,
+        top_k=5,
+        output_fields=["id", "source", "content"],
+        metric_type="COSINE",
+        anns_field = "vector"
+    )
+
+    prompt = """ You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
+        The question is provided below, along with four answer options labeled A, B, C, and D. 
+        Your goal is to select the most appropriate answer based on your medical knowledge and reasoning, as well as any additional context provided. 
+        """ + "\n\n".join([f"{r.entity.get('content')}" for r in search_results[0]]) + prompt
+    
     inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
     with torch.no_grad():
         outputs = model(**inputs, return_dict=True)
@@ -88,7 +121,7 @@ def eval_mmlu(q): # [probA, probB, probC, probD]
     if next_token_id not in option_tokens.values():
         print(f"Error, next token is not an option: {next_token_text}")
                                   
-    return torch.softmax(option_logits, dim=0).tolist() + [end - start]
+    return torch.softmax(option_logits, dim=0).tolist() + [end - start] + [search_results[0]]
 
 # Warmup
 print("Warming up model")

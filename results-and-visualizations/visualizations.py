@@ -1,3 +1,8 @@
+"""
+llama_baseline: 3 errors
+mistral_baseline: 15 errors
+"""
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -5,20 +10,20 @@ import seaborn as sns
 # Load CSV
 all_dfs = []
 for i in range(1, 6):
-    df = pd.read_csv(f"results-and-visualizations/baseline_results/medmcqa_results_{i}.csv")
+    df = pd.read_csv(f"medmcqa_results_{i}.csv")
     df['source'] = 'MEDMCQA'
     df['split'] = i
     all_dfs.append(df)
 
 for i in range(1, 6):
-    df = pd.read_csv(f"results-and-visualizations/baseline_results/mmlu_results_{i}.csv")
+    df = pd.read_csv(f"mmlu_results_{i}.csv")
     df['source'] = 'MMLU'
     df['split'] = i
     all_dfs.append(df)
 df = pd.concat(all_dfs, ignore_index=True)
 
 # Confidence Classifier
-THRESHOLD = [0, 0.40, 0.70, 0.90, 1.0]
+THRESHOLD = [0, 0.40, 0.70, 0.90, 1.01]
 labels = ['Low', 'Medium', 'High', 'Very High']
 df['confidence'] = pd.cut(df[['probA', 'probB', 'probC', 'probD']].max(axis=1), bins=THRESHOLD, labels=labels, right=False)
 
@@ -157,4 +162,42 @@ for source in split_acc['source'].unique():
         ax.text(row['split'], row['result'] + 0.02, f"{row['result']:.2f}", ha='center', va='bottom', fontsize=9)
 plt.tight_layout()
 plt.savefig('performance_across_splits.png', dpi=300, bbox_inches='tight')
+plt.show()
+
+# Time graph
+medmcqa_df = df[df['source'] == 'MEDMCQA']
+mmlu_df = df[df['source'] == 'MMLU']
+
+medmcqa_time_stats = medmcqa_df.groupby('subject')['time'].agg(['mean', 'std']).reset_index()
+medmcqa_time_stats.columns = ['subject', 'mean', 'std']
+mmlu_time_stats = mmlu_df.groupby('subject')['time'].agg(['mean', 'std']).reset_index()
+mmlu_time_stats.columns = ['subject', 'mean', 'std']
+
+medmcqa_avg = medmcqa_time_stats['mean'].mean()
+mmlu_avg = mmlu_time_stats['mean'].mean()
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 8))
+
+subjects1 = medmcqa_time_stats['subject']
+means1 = medmcqa_time_stats['mean']
+stds1 = medmcqa_time_stats['std']
+ax1.barh(subjects1, means1, xerr=stds1, color='steelblue', alpha=0.8, capsize=3)
+ax1.axvline(x=medmcqa_avg, color='red', linestyle='--', label=f'Average = {medmcqa_avg:.3f}s')
+ax1.set_title('MEDMCQA')
+ax1.set_xlabel('Time (seconds)')
+ax1.set_ylabel('Subject')
+ax1.legend()
+
+subjects2 = mmlu_time_stats['subject']
+means2 = mmlu_time_stats['mean']
+stds2 = mmlu_time_stats['std']
+ax2.barh(subjects2, means2, xerr=stds2, color='darkorange', alpha=0.8, capsize=3)
+ax2.axvline(x=mmlu_avg, color='red', linestyle='--', label=f'Average = {mmlu_avg:.3f}s')
+ax2.set_title('MMLU')
+ax2.set_xlabel('Time (seconds)')
+ax2.set_ylabel('Subject')
+ax2.legend()
+
+plt.tight_layout()
+plt.savefig('time_by_subject.png', dpi=300)
 plt.show()

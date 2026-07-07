@@ -19,7 +19,7 @@ for i in range(5):
     # File generation
     split = [q for subject, qs in questions.items() for q in qs[i*20:(i+1)*20]]
     df_split = pd.DataFrame(split, columns=["id", "question", "opa", "opb", "opc", "opd", "cop", "choice_type", "exp", "subject_name", "topic_name"])
-    df_split.to_csv(f"medmcaq_{i+1}.csv", index=False)
+    df_split.to_csv(f"medmcqa_{i+1}.csv", index=False)
 
     # Check questions per subject
     subject_counts = df_split["subject_name"].value_counts()
