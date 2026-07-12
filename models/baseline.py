@@ -1,11 +1,35 @@
+"""
+llama_v1: 3 errors
+llama_v2: 1 error
+mistral: 15 errors
+Prompts:
+- - - - - v1 - - - - -
+You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
+The question is provided below, along with four answer options labeled A, B, C, and D. 
+Your goal is to select the most appropriate answer based on your medical knowledge and reasoning.
+Question:
+A)
+B)
+C)
+D)
+Answer only with the letter of the correct option. Answer: 
+- - - - - v2 - - - - -
+Question:
+A)
+B)
+C)
+D)
+Answer only with the letter of the correct option. Answer: 
+"""
+
 import ast
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import pandas as pd
 import time as t
 
-# model_name = "meta-llama/Llama-3.1-8B-Instruct"
-model_name = "mistralai/Mistral-7B-Instruct-v0.3"
+model_name = "meta-llama/Llama-3.1-8B-Instruct"
+# model_name = "mistralai/Mistral-7B-Instruct-v0.3"
 tokenizer = AutoTokenizer.from_pretrained(model_name, dtype=torch.float16, device_map="auto")
 model = AutoModelForCausalLM.from_pretrained(model_name, dtype=torch.float16, device_map="auto")
 model.eval()
@@ -20,9 +44,6 @@ option_tokens = {"A": tokenizer.encode(" A", add_special_tokens=False)[0],
 def eval_medmcqa(q): # [probA, probB, probC, probD]
 
     prompt = f"""
-        You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
-        The question is provided below, along with four answer options labeled A, B, C, and D. 
-        Your goal is to select the most appropriate answer based on your medical knowledge and reasoning. 
         Question: {q["question"]}
         A) {q["opa"]}
         B) {q["opb"]}
@@ -60,9 +81,6 @@ def eval_medmcqa(q): # [probA, probB, probC, probD]
 def eval_mmlu(q): # [probA, probB, probC, probD]
     options = ast.literal_eval(q["options"])
     prompt = f"""
-        You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
-        The question is provided below, along with four answer options labeled A, B, C, and D. 
-        Your goal is to select the most appropriate answer based on your medical knowledge and reasoning
         Question: {q["centerpiece"]}
         A) {options[0]}
         B) {options[1]}

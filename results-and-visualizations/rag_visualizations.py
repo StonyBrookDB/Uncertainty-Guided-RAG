@@ -1,11 +1,7 @@
-"""
-llama_baseline: 3 errors
-mistral_baseline: 15 errors
-"""
-
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import ast
 
 # Load CSV
 all_dfs = []
@@ -22,17 +18,22 @@ for i in range(1, 6):
     all_dfs.append(df)
 df = pd.concat(all_dfs, ignore_index=True)
 
-# Confidence Classifier
+# Maximum probability
+df['max_prob'] = df[['probA', 'probB', 'probC', 'probD']].max(axis=1)
+
+# Max similarity
+df['max_similarity'] = df['similarity'].apply(lambda x: max(ast.literal_eval(x)) if isinstance(x, str) else max(x))
+
+# Confidence & similarity classifier
 THRESHOLD = [0, 0.40, 0.70, 0.90, 1.01]
 labels = ['Low', 'Medium', 'High', 'Very High']
-df['confidence'] = pd.cut(df[['probA', 'probB', 'probC', 'probD']].max(axis=1), bins=THRESHOLD, labels=labels, right=False)
+df['confidence'] = pd.cut(df['max_prob'], bins=THRESHOLD, labels=labels, right=False)
+df['similarity_classify'] = pd.cut(df['max_similarity'], bins=THRESHOLD, labels=labels, right=False)
 
-# Choice Classifier
+# Choice classifier
 prob_cols = ['probA', 'probB', 'probC', 'probD']
 df['choice'] = df[prob_cols].idxmax(axis=1).str.extract(r'prob(\w)')[0]
 
-# Maximum probability
-df['max_prob'] = df[['probA', 'probB', 'probC', 'probD']].max(axis=1)
 
 # Pie Charts for answer choices
 data_list = [
@@ -200,4 +201,92 @@ ax2.legend()
 
 plt.tight_layout()
 plt.savefig('time_by_subject.png', dpi=300)
+plt.show()
+
+# Scatter plot with trend line
+plt.figure(figsize=(10, 6))
+sns.scatterplot(data=df, x='max_similarity', y='max_prob', hue='source', alpha=0.7)
+sns.regplot(data=df, x='max_similarity', y='max_prob', scatter=False, color='red', label='Trend line (all data)')
+
+plt.xlabel('Maximum Similarity')
+plt.ylabel('Maximum Confidence (Probability)')
+plt.title('Confidence vs. Retrieval Similarity')
+plt.legend()
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig('confidence_vs_similarity.png', dpi=300)
+plt.show()
+
+# Source Breakdown
+df['sources'] = df['sources'].apply(ast.literal_eval)
+df['similarity'] = df['similarity'].apply(ast.literal_eval)
+
+overall = {'PBMD':0,'STAT':0,'TEXT':0}
+medmcqa = {'PBMD':0,'STAT':0,'TEXT':0}
+mmlu = {'PBMD':0,'STAT':0,'TEXT':0}
+
+for _, row in df.iterrows():
+    for s, sim in zip(row['sources'], row['similarity']):
+        overall[s] += sim
+        if row['source'] == 'MEDMCQA':
+            medmcqa[s] += sim
+        else:
+            mmlu[s] += sim
+
+data = [(overall, 'Overall'), (medmcqa, 'MEDMCQA'), (mmlu, 'MMLU')]
+fig, axes = plt.subplots(1,3,figsize=(15,5))
+colors = ['#ff9999','#66b3ff','#99ff99']
+
+for ax, (totals, title) in zip(axes, data):
+    vals = [totals[k] for k in ['PBMD','STAT','TEXT']]
+    ax.pie(vals, labels=['PBMD','STAT','TEXT'], autopct='%1.1f%%', startangle=90, colors=colors)
+    ax.set_title(title)
+    ax.axis('equal')
+
+plt.tight_layout()
+plt.savefig('source_pies.png')
+plt.show()
+
+# Similarity and accuracy
+fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+
+ax = axes[0]
+for outcome, color, label in zip([True, False], ['blue', 'red'], ['Correct', 'Incorrect']):
+    subset = df[(df['source'] == 'MEDMCQA') & (df['result'] == outcome)]['max_similarity']
+    if not subset.empty:
+        sns.kdeplot(subset, ax=ax, color=color, label=label, linewidth=2, fill=True, alpha=0.3)
+ax.set_xlabel('Maximum Similarity')
+ax.set_ylabel('Density')
+ax.set_title('MEDMCQA - Similarity Distribution')
+ax.legend()
+ax.grid(alpha=0.3)
+
+ax = axes[1]
+for outcome, color, label in zip([True, False], ['blue', 'red'], ['Correct', 'Incorrect']):
+    subset = df[(df['source'] == 'MMLU') & (df['result'] == outcome)]['max_similarity']
+    if not subset.empty:
+        sns.kdeplot(subset, ax=ax, color=color, label=label, linewidth=2, fill=True, alpha=0.3)
+ax.set_xlabel('Maximum Similarity')
+ax.set_ylabel('Density')
+ax.set_title('MMLU - Similarity Distribution')
+ax.legend()
+ax.grid(alpha=0.3)
+
+ax = axes[2]
+crosstab = pd.crosstab(df['similarity_classify'], df['result'], normalize='index') * 100
+crosstab = crosstab.rename(columns={True: 'Correct', False: 'Incorrect'})
+crosstab[['Incorrect', 'Correct']].plot(kind='bar', stacked=True, ax=ax, color=['red', 'blue'], edgecolor='black')
+ax.set_xlabel('Similarity Level')
+ax.set_ylabel('Percentage (%)')
+ax.set_title('Outcome by Similarity Level')
+ax.legend(title='Outcome')
+ax.axhline(y=50, color='gray', linestyle='--', alpha=0.7)
+ax.grid(axis='y', alpha=0.3)
+
+for i, conf in enumerate(crosstab.index):
+    total = len(df[df['similarity_classify'] == conf])
+    ax.text(i, 102, f'n={total}', ha='center', va='bottom', fontsize=9)
+
+plt.tight_layout()
+plt.savefig('similarity_analysis.png', dpi=300, bbox_inches='tight')
 plt.show()

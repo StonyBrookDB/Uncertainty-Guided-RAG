@@ -1,49 +1,3 @@
-"""
-llama_1.2.5: 17 errors
-llama_1.2.3:
-llama_1.2.1:
-llama_2.2.5: 10 errors
-llama_2.2.3: 8 errors
-llama_2.2.1: 0 errors
-prompt.embedding.top_k
-- - - - - v1 - - - - - 
-You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
-The question is provided below, along with four answer options labeled A, B, C, and D. 
-Your goal is to select the most appropriate answer based on your medical knowledge and reasoning.
-Question:
-A)
-B)
-C)
-D)
-Answer only with the letter of the correct option. Answer: 
-- - - - - v2 - - - - -
-Question:
-A)
-B)
-C)
-D)
-Answer only with the letter of the correct option. Answer: 
-- - - - - v1 - - - - - 
-You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
-The question is provided below, along with four answer options labeled A, B, C, and D. 
-Your goal is to select the most appropriate answer based on your medical knowledge and reasoning.
-Question:
-A)
-B)
-C)
-D)
-Answer only with the letter of the correct option. Answer: 
-- - - - - v2 - - - - -
-Question:
-A)
-B)
-C)
-D)
-Answer only with the letter of the correct option. Answer: 
-- - - - - v3 - - - - -
-Question:
-"""
-
 from pymilvus import MilvusClient
 import ast
 import torch
@@ -52,17 +6,8 @@ import pandas as pd
 import time as t
 from sentence_transformers import SentenceTransformer
 
-# Misc
-INSTRUCTIONS = """You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
-The question is provided below, along with four answer options labeled A, B, C, and D. 
-Your goal is to select the most appropriate answer based on your medical knowledge and reasoning, as well as any additional context provided. """
-error = 0
-
 # Milvus connect
 client = MilvusClient(uri="http://localhost:19530")
-client.load_collection("MedRAG_textbook_collection")
-client.load_collection("MedRAG_statpearls_collection")
-client.load_collection("MedRAG_pubmed_collection")
 
 # AI Model
 model_name = "meta-llama/Llama-3.1-8B-Instruct"
@@ -72,47 +17,41 @@ model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto")
 model.eval()
 
 # Embedding model
-embedding_model = SentenceTransformer("BAAI/bge-base-en-v1.5", trust_remote_code=True, device="cuda")
+embedding_model = SentenceTransformer("Alibaba-NLP/gte-base-en-v1.5", trust_remote_code=True, device="auto")
 
 # Map options to token IDs
 option_tokens = {"A": tokenizer.encode(" A", add_special_tokens=False)[0],
                  "B": tokenizer.encode(" B", add_special_tokens=False)[0],
                  "C": tokenizer.encode(" C", add_special_tokens=False)[0],
                  "D": tokenizer.encode(" D", add_special_tokens=False)[0]}
-COLLECTIONS = ["MedRAG_textbook_collection", "MedRAG_statpearls_collection", "MedRAG_pubmed_collection"]
+
+COLLECTIONS = ["MedRAG_textbook_collection", "MedRAG_wikipedia_collection", "MedRAG_pubmed_collection"]
 def get_context(prompt):
-    query_embedding = embedding_model.encode(prompt, normalize_embeddings=True).tolist()
-    search = []
-    for c in COLLECTIONS:
-        query = client.search(
-            collection_name=c,
-            data=[query_embedding],
-            limit=1,
-            output_fields=["id", "source", "content"],
-            search_params={
-                "metric_type": "COSINE",
-                "params": {}
-            }
-        )
-        search.extend(query[0])
-
+    query_embedding = embedding_model.encode(prompt, normalize_embeddings=True, device="auto").tolist()
     results = []
-    for r in search:
-        results.append({
-            "score": r["distance"],
-            "id": r["id"],
-            "source": r["entity"].get("source"),
-            "content": r["entity"].get("content")
-        })
-
-    results = sorted(results, key=lambda x: x["score"], reverse=True)[:1]
-    return "\n\n".join([f"{r['content']}" for r in results]), results
+    for c in COLLECTIONS:
+        search_results = client.search(
+            collection_name=c,
+            query_embeddings=query_embedding,
+            top_k=5,
+            output_fields=["id", "source", "content"],
+            metric_type="COSINE",
+            anns_field = "vector"
+        )
+        for r in search_results[0]:
+            results.append({
+                "score": r.score,
+                "id": r.entity.get("id"),
+                "source": r.entity.get("source"),
+                "content": r.entity.get("content")
+            })
+    results = sorted(results, key=lambda x: x["score"], reverse=True)[:5]
+    return ["\n\n".join([f"{r['content']}" for r in results]), results]
 
 # Keys: ["id", "question", "opa", "opb", "opc", "opd", "cop", "choice_type", "exp", "subject_name", "topic_name"]
 def eval_medmcqa(q): # [probA, probB, probC, probD, time, search_results]
 
     prompt = f"""
-        {INSTRUCTIONS}
         Question: {q["question"]}
         A) {q["opa"]}
         B) {q["opb"]}
@@ -122,16 +61,15 @@ def eval_medmcqa(q): # [probA, probB, probC, probD, time, search_results]
     
     start = t.time()
     context, search_results = get_context(prompt)
-    prompt = f"""
-        Context: 
-        {context}
-{prompt}"""
+    prompt = """ You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
+        The question is provided below, along with four answer options labeled A, B, C, and D. 
+        Your goal is to select the most appropriate answer based on your medical knowledge and reasoning, as well as any additional context provided. 
+        """ + context + prompt
+
     inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
     with torch.no_grad():
         outputs = model(**inputs, return_dict=True)
     end = t.time()
-
-    print(prompt)
         
     last_token_logits = outputs.logits[0, -1, :]
 
@@ -145,8 +83,6 @@ def eval_medmcqa(q): # [probA, probB, probC, probD, time, search_results]
     next_token_text = tokenizer.decode(next_token_id)
     if next_token_id not in option_tokens.values():
         print(f"Error, next token is not an option: {next_token_text}")
-        global error
-        error += 1
 
     # Print model response
     # with torch.no_grad():
@@ -167,7 +103,10 @@ def eval_mmlu(q): # [probA, probB, probC, probD, time, search_results]
         Answer only with the letter of the correct option. Answer: """
     start = t.time()
     context, search_results = get_context(prompt)
-    prompt = f"Context:\n{context}\n{prompt}"
+    prompt = """ You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
+        The question is provided below, along with four answer options labeled A, B, C, and D. 
+        Your goal is to select the most appropriate answer based on your medical knowledge and reasoning, as well as any additional context provided. 
+        """ + context + prompt
     
     inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
     with torch.no_grad():
@@ -186,8 +125,6 @@ def eval_mmlu(q): # [probA, probB, probC, probD, time, search_results]
     next_token_text = tokenizer.decode(next_token_id)
     if next_token_id not in option_tokens.values():
         print(f"Error, next token is not an option: {next_token_text}")
-        global error
-        error += 1
                                   
     return torch.softmax(option_logits, dim=0).tolist() + [end - start] + [search_results]
 
@@ -261,4 +198,3 @@ for i in range(1, 6):
         })
     df_split = pd.DataFrame(results, columns=["id", "subject", "probA", "probB", "probC", "probD", "result", "answer", "time", "split", "sources", "ids", "similarity"])
     df_split.to_csv(f"mmlu_results_{i}.csv", index=False)
-print(f"Total errors: {error}")

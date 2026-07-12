@@ -1,0 +1,117 @@
+
+"""
+wget https://ftp.ncbi.nlm.nih.gov/pub/litarch/3d/12/statpearls_NBK430685.tar.gz -P ./dataset-processing/statpearls/raw
+tar -xzvf ./dataset-processing/statpearls/raw/statpearls_NBK430685.tar.gz -C ./dataset-processing/statpearls/raw
+"""
+
+import os
+import json
+import tqdm
+import xml.etree.ElementTree as ET
+
+def ends_with_ending_punctuation(s):
+    ending_punctuation = ('.', '?', '!')
+    return any(s.endswith(char) for char in ending_punctuation)
+
+def concat(title, content):
+    if ends_with_ending_punctuation(title.strip()):
+        return title.strip() + " " + content.strip()
+    else:
+        return title.strip() + ". " + content.strip()
+
+def extract_text(element):
+    text = (element.text or "").strip()
+
+    for child in element:
+        text += (" " if len(text) else "") + extract_text(child)
+        if child.tail and len(child.tail.strip()) > 0:
+            text += (" " if len(text) else "") + child.tail.strip()
+    return text.strip()
+
+def is_subtitle(element):
+    if element.tag != 'p':
+        return False
+    if len(list(element)) != 1:
+        return False
+    if list(element)[0].tag != 'bold':
+        return False
+    if list(element)[0].tail and len(list(element)[0].tail.strip()) > 0:
+        return False
+    return True
+
+def extract(fpath):
+    fname = fpath.split("/")[-1].replace(".nxml", "")
+    tree = ET.parse(fpath)
+    title = tree.getroot().find(".//title").text
+    sections = tree.getroot().findall(".//sec")
+    saved_text = []
+    j = 0
+    last_text = None
+    for sec in sections:
+        sec_title = sec.find('./title').text.strip()
+        sub_title = ""
+        prefix = " -- ".join([title, sec_title])
+        last_text = None
+        last_json = None
+        last_node = None
+        for ch in sec:
+            if is_subtitle(ch):
+                last_text = None
+                last_json = None
+                sub_title = extract_text(ch)
+                prefix = " -- ".join(prefix.split(" -- ")[:2] + [sub_title])
+            elif ch.tag == 'p':
+                curr_text = extract_text(ch)
+                if len(curr_text) < 200 and last_text is not None and len(last_text + curr_text) < 1000:
+                    last_text = " ".join([last_json['content'], curr_text])
+                    last_json = {"id": last_json['id'], "title": last_json['title'], "content": last_text}
+                    last_json["contents"] = concat(last_json["title"], last_json["content"])
+                    saved_text[-1] = json.dumps(last_json)
+                else:
+                    last_text = curr_text
+                    last_json = {"id": '_'.join([fname, str(j)]), "title": prefix, "content": curr_text}
+                    last_json["contents"] = concat(last_json["title"], last_json["content"])
+                    saved_text.append(json.dumps(last_json))
+                    j += 1
+            elif ch.tag == 'list':
+                list_text = [extract_text(c) for c in ch]
+                if last_text is not None and len(" ".join(list_text) + last_text) < 1000:
+                    last_text = " ".join([last_json["content"]] + list_text)
+                    last_json = {"id": last_json['id'], "title": last_json['title'], "content": last_text}
+                    last_json["contents"] = concat(last_json["title"], last_json["content"])
+                    saved_text[-1] = json.dumps(last_json)
+                elif len(" ".join(list_text)) < 1000:
+                    last_text = " ".join(list_text)
+                    last_json = {"id": '_'.join([fname, str(j)]), "title": prefix, "content": last_text}
+                    last_json["contents"] = concat(last_json["title"], last_json["content"])
+                    saved_text.append(json.dumps(last_json))
+                    j += 1
+                else:
+                    last_text = None
+                    last_json = None                    
+                    for c in list_text:
+                        saved_text.append(json.dumps({"id": '_'.join([fname, str(j)]), "title": prefix, "content": c, "contents": concat(prefix, c)}))
+                        j += 1
+                if last_node is not None and is_subtitle(last_node):
+                    sub_title = ""
+                    prefix = " -- ".join([title, sec_title])
+            last_node = ch
+    return saved_text
+
+if __name__ == "__main__":
+    raw_dir = "dataset-processing/statpearls/raw/statpearls_NBK430685"
+    chunk_dir = "dataset-processing/statpearls/chunk"
+    fnames = sorted([fname for fname in os.listdir(raw_dir) if fname.endswith(".nxml")])
+    os.makedirs(chunk_dir, exist_ok=True)
+    for fname in tqdm.tqdm(fnames):
+        fpath = os.path.join(raw_dir, fname)
+        saved_text = extract(fpath)
+
+        if len(saved_text) > 0:
+            outpath = os.path.join(
+                chunk_dir,
+                fname.replace(".nxml", ".jsonl")
+            )
+
+            with open(outpath, "w") as f:
+                f.write("\n".join(saved_text))
