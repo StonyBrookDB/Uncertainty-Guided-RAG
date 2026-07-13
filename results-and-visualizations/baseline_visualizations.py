@@ -196,3 +196,38 @@ ax2.legend()
 plt.tight_layout()
 plt.savefig('time_by_subject.png', dpi=300)
 plt.show()
+
+# Number of uncertain options
+df['result'] = df['result'].astype(bool)
+df['num_within'] = (df[['probA', 'probB', 'probC', 'probD']] >= (df['max_prob'] - 0.2).values[:, None]).sum(axis=1)
+
+grouped = (df.groupby(['num_within', 'result']).size().reset_index(name='count'))
+grouped['percentage'] = (grouped.groupby('num_within')['count'].transform(lambda x: x / x.sum() * 100))
+
+pivot = (grouped.pivot(index='num_within', columns='result', values='percentage').fillna(0).reindex(index=range(1, 5), fill_value=0))
+pivot = pivot.rename(columns={False: 'Incorrect', True: 'Correct'})
+fig, ax = plt.subplots(figsize=(8, 6))
+pivot[['Incorrect', 'Correct']].plot(
+    kind='bar',
+    stacked=True,
+    ax=ax,
+    color=['red', 'blue'],
+    edgecolor='black'
+)
+
+ax.set_xlabel('Number of options within 0.2 of maximum probability')
+ax.set_ylabel('Percentage (%)')
+ax.set_title('Outcome by Number of Close Options')
+ax.legend(title='Outcome')
+ax.axhline(y=50, color='gray', linestyle='--', alpha=0.7)
+ax.grid(axis='y', alpha=0.3)
+ax.set_ylim(0, 105)
+ax.set_xticklabels([str(i) for i in range(1, 5)], rotation=0)
+
+for i, n in enumerate(range(1, 5)):
+    total = len(df[df['num_within'] == n])
+    ax.text(i, 102, f'n={total}', ha='center', va='bottom', fontsize=9)
+
+plt.tight_layout()
+plt.savefig("uncertain_options_analysis.png", dpi=300, bbox_inches='tight')
+plt.show()

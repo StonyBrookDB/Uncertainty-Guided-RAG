@@ -1,6 +1,6 @@
 """
 llama_v1: 3 errors
-llama_v2: 1 error
+llama_v2: 1 error/273 errors
 mistral: 15 errors
 Prompts:
 - - - - - v1 - - - - -
@@ -27,7 +27,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import pandas as pd
 import time as t
-
+errors = 0
 model_name = "meta-llama/Llama-3.1-8B-Instruct"
 # model_name = "mistralai/Mistral-7B-Instruct-v0.3"
 tokenizer = AutoTokenizer.from_pretrained(model_name, dtype=torch.float16, device_map="auto")
@@ -43,20 +43,18 @@ option_tokens = {"A": tokenizer.encode(" A", add_special_tokens=False)[0],
 # Keys: ["id", "question", "opa", "opb", "opc", "opd", "cop", "choice_type", "exp", "subject_name", "topic_name"]
 def eval_medmcqa(q): # [probA, probB, probC, probD]
 
-    prompt = f"""
-        Question: {q["question"]}
-        A) {q["opa"]}
-        B) {q["opb"]}
-        C) {q["opc"]}
-        D) {q["opd"]}
-        Answer only with the letter of the correct option. Answer: """
+    prompt = f"""Question: {q["question"]}
+    A) {q["opa"]}
+    B) {q["opb"]}
+    C) {q["opc"]}
+    D) {q["opd"]}
+Answer only with the letter of the correct option. Answer: """
     
     start = t.time()
     inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
     with torch.no_grad():
         outputs = model(**inputs, return_dict=True)
     end = t.time()
-        
     last_token_logits = outputs.logits[0, -1, :]
 
     option_logits = torch.tensor([last_token_logits[option_tokens["A"]],
@@ -69,6 +67,8 @@ def eval_medmcqa(q): # [probA, probB, probC, probD]
     next_token_text = tokenizer.decode(next_token_id)
     if next_token_id not in option_tokens.values():
         print(f"Error, next token is not an option: {next_token_text}")
+        global errors
+        errors += 1
 
     # Print model response
     # with torch.no_grad():
@@ -80,13 +80,12 @@ def eval_medmcqa(q): # [probA, probB, probC, probD]
 # Keys: ["centerpiece", "options", "correct_options", "correct_options_idx", "correct_options_literal", "subject", "id"]
 def eval_mmlu(q): # [probA, probB, probC, probD]
     options = ast.literal_eval(q["options"])
-    prompt = f"""
-        Question: {q["centerpiece"]}
-        A) {options[0]}
-        B) {options[1]}
-        C) {options[2]}
-        D) {options[3]}
-        Answer only with the letter of the correct option. Answer: """
+    prompt = f"""Question: {q["centerpiece"]}
+    A) {options[0]}
+    B) {options[1]}
+    C) {options[2]}
+    D) {options[3]}
+Answer only with the letter of the correct option. Answer: """
     start = t.time()
     inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
     with torch.no_grad():
@@ -105,6 +104,8 @@ def eval_mmlu(q): # [probA, probB, probC, probD]
     next_token_text = tokenizer.decode(next_token_id)
     if next_token_id not in option_tokens.values():
         print(f"Error, next token is not an option: {next_token_text}")
+        global errors
+        errors += 1
                                   
     return torch.softmax(option_logits, dim=0).tolist() + [end - start]
 
@@ -172,3 +173,4 @@ for i in range(1, 6):
         })
     df_split = pd.DataFrame(results, columns=["id", "subject", "probA", "probB", "probC", "probD", "result", "answer", "time", "split"])
     df_split.to_csv(f"mmlu_results_{i}.csv", index=False)
+print(f"Total errors: {errors}")

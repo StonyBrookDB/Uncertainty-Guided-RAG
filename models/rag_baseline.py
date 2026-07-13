@@ -1,10 +1,13 @@
 """
-llama_1.2.5: 17 errors
+llama_1.2.5: 2 errors
 llama_1.2.3:
 llama_1.2.1:
 llama_2.2.5: 10 errors
 llama_2.2.3: 8 errors
 llama_2.2.1: 0 errors
+llama_2.3.5: 3 errors
+llama_2.3.3: 2 errors
+llama_2.3.1: 0 errors
 prompt.embedding.top_k
 - - - - - v1 - - - - - 
 You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
@@ -57,6 +60,7 @@ INSTRUCTIONS = """You are a helpful medical expert, and your task is to answer a
 The question is provided below, along with four answer options labeled A, B, C, and D. 
 Your goal is to select the most appropriate answer based on your medical knowledge and reasoning, as well as any additional context provided. """
 error = 0
+TOP_K = 3
 
 # Milvus connect
 client = MilvusClient(uri="http://localhost:19530")
@@ -87,7 +91,7 @@ def get_context(prompt):
         query = client.search(
             collection_name=c,
             data=[query_embedding],
-            limit=1,
+            limit=TOP_K,
             output_fields=["id", "source", "content"],
             search_params={
                 "metric_type": "COSINE",
@@ -105,33 +109,30 @@ def get_context(prompt):
             "content": r["entity"].get("content")
         })
 
-    results = sorted(results, key=lambda x: x["score"], reverse=True)[:1]
+    results = sorted(results, key=lambda x: x["score"], reverse=True)[:TOP_K]
     return "\n\n".join([f"{r['content']}" for r in results]), results
 
 # Keys: ["id", "question", "opa", "opb", "opc", "opd", "cop", "choice_type", "exp", "subject_name", "topic_name"]
 def eval_medmcqa(q): # [probA, probB, probC, probD, time, search_results]
-
-    prompt = f"""
-        {INSTRUCTIONS}
-        Question: {q["question"]}
-        A) {q["opa"]}
-        B) {q["opb"]}
-        C) {q["opc"]}
-        D) {q["opd"]}
-        Answer only with the letter of the correct option. Answer: """
-    
     start = t.time()
-    context, search_results = get_context(prompt)
-    prompt = f"""
-        Context: 
-        {context}
-{prompt}"""
+    context, search_results = get_context(f"""Question: {q["question"]}
+A) {q["opa"]}
+B) {q["opb"]}
+C) {q["opc"]}
+D) {q["opd"]}
+    """)
+    prompt = f"""Context:
+{context}
+Question: {q["question"]}
+    A) {q["opa"]}
+    B) {q["opb"]}
+    C) {q["opc"]}
+    D) {q["opd"]}
+Answer only with the letter of the correct option. Answer: """
     inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
     with torch.no_grad():
         outputs = model(**inputs, return_dict=True)
     end = t.time()
-
-    print(prompt)
         
     last_token_logits = outputs.logits[0, -1, :]
 
@@ -158,16 +159,21 @@ def eval_medmcqa(q): # [probA, probB, probC, probD, time, search_results]
 # Keys: ["centerpiece", "options", "correct_options", "correct_options_idx", "correct_options_literal", "subject", "id"]
 def eval_mmlu(q): # [probA, probB, probC, probD, time, search_results]
     options = ast.literal_eval(q["options"])
-    prompt = f"""
-        Question: {q["centerpiece"]}
-        A) {options[0]}
-        B) {options[1]}
-        C) {options[2]}
-        D) {options[3]}
-        Answer only with the letter of the correct option. Answer: """
     start = t.time()
-    context, search_results = get_context(prompt)
-    prompt = f"Context:\n{context}\n{prompt}"
+    context, search_results = get_context(f"""Question: {q["centerpiece"]}
+A) {options[0]}
+B) {options[1]}
+C) {options[2]}
+D) {options[3]}""")
+                                        
+    prompt = f"""Context:
+{context}
+Question: {q["centerpiece"]}
+    A) {options[0]}
+    B) {options[1]}
+    C) {options[2]}
+    D) {options[3]}
+Answer only with the letter of the correct option. Answer: """
     
     inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
     with torch.no_grad():
