@@ -1,8 +1,3 @@
-"""
-v1: Both context
-v2: Only newly retrieved context
-"""
-
 from pymilvus import MilvusClient
 import ast
 import torch
@@ -93,15 +88,15 @@ Answer only with the letter of the correct option. Answer: """
                                   last_token_logits[option_tokens["B"]],
                                   last_token_logits[option_tokens["C"]],
                                   last_token_logits[option_tokens["D"]]])
-
     probs = torch.softmax(option_logits, dim=0).tolist()
     confident_indices = [i for i in range(4) if probs[i] >= max(probs) - THRESHOLD]
-    next_query = "What is the difference between "
-    for i in confident_indices[:-1]:
-        next_query += f"{q[['opa', 'opb', 'opc', 'opd'][i]]}, "
-    next_query += f"and {q[['opa', 'opb', 'opc', 'opd'][confident_indices[-1]]]}?"
-    add_context, add_search_results = get_context(next_query)
-    prompt = f"""You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
+    if len(confident_indices) != 1:
+        next_query = "What is the difference between "
+        for i in confident_indices[:-1]:
+            next_query += f"{q[['opa', 'opb', 'opc', 'opd'][i]]}, "
+        next_query += f"and {q[['opa', 'opb', 'opc', 'opd'][confident_indices[-1]]]}?"
+        add_context, add_search_results = get_context(next_query)
+        prompt = f"""You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
 The question is provided below, along with four answer options labeled A, B, C, and D. 
 Your goal is to select the most appropriate answer based on your medical knowledge and reasoning, as well as any additional context provided. 
 Context:
@@ -114,10 +109,10 @@ Question: {q["question"]}
     C) {q["opc"]}
     D) {q["opd"]}
 Answer only with the letter of the correct option. Answer: """
-    
-    inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
-    with torch.no_grad():
-        outputs = model(**inputs, return_dict=True)
+        
+        inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
+        with torch.no_grad():
+            outputs = model(**inputs, return_dict=True)
     end = t.time()
 
     last_token_logits = outputs.logits[0, -1, :]
@@ -177,12 +172,13 @@ Answer only with the letter of the correct option. Answer: """
 
     probs = torch.softmax(option_logits, dim=0).tolist()
     confident_indices = [i for i in range(4) if probs[i] >= max(probs) - THRESHOLD]
-    next_query = "What is the difference between "
-    for i in confident_indices[:-1]:
-        next_query += f"{options[i]}, "
-    next_query += f"and {options[confident_indices[-1]]}?"
-    add_context, add_search_results = get_context(next_query)
-    prompt = f"""You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
+    if len(confident_indices) != 1:
+        next_query = "What is the difference between "
+        for i in confident_indices[:-1]:
+            next_query += f"{options[i]}, "
+        next_query += f"and {options[confident_indices[-1]]}?"
+        add_context, add_search_results = get_context(next_query)
+        prompt = f"""You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
 The question is provided below, along with four answer options labeled A, B, C, and D. 
 Your goal is to select the most appropriate answer based on your medical knowledge and reasoning, as well as any additional context provided. 
 Context:
@@ -195,9 +191,9 @@ Question: {q["centerpiece"]}
     C) {options[2]}
     D) {options[3]}
 Answer only with the letter of the correct option. Answer: """
-    inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
-    with torch.no_grad():
-        outputs = model(**inputs, return_dict=True)
+        inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
+        with torch.no_grad():
+            outputs = model(**inputs, return_dict=True)
     end = t.time()
         
     last_token_logits = outputs.logits[0, -1, :]

@@ -6,13 +6,13 @@ import ast
 # Load CSV
 all_dfs = []
 for i in range(1, 6):
-    df = pd.read_csv(f"results-and-visualizations/rag_baseline_v2/2.2_results/medmcqa_results_{i}.csv")
+    df = pd.read_csv(f"results-and-visualizations/rag_baseline_v2/1.2_results/medmcqa_results_{i}.csv")
     df['source'] = 'MEDMCQA'
     df['split'] = i
     all_dfs.append(df)
 
 for i in range(1, 6):
-    df = pd.read_csv(f"results-and-visualizations/rag_baseline_v2/2.2_results/mmlu_results_{i}.csv")
+    df = pd.read_csv(f"results-and-visualizations/rag_baseline_v2/1.2_results/mmlu_results_{i}.csv")
     df['source'] = 'MMLU'
     df['split'] = i
     all_dfs.append(df)
@@ -352,7 +352,11 @@ df['correct_prob'] = df.apply(lambda row: get_prob(row['answer'], row), axis=1)
 df['prob_distance'] = df['max_prob'] - df['correct_prob']
 
 fig, axes = plt.subplots(1, 3, figsize=(15, 5), sharex=True, sharey=True)
-subsets = {'All Data': df, 'MEDMCQA': df[df['source'] == 'MEDMCQA'], 'MMLU': df[df['source'] == 'MMLU']}
+subsets = {
+    'All Data': df[df['prob_distance'] > 0], 
+    'MEDMCQA': df[(df['source'] == 'MEDMCQA') & (df['prob_distance'] > 0)], 
+    'MMLU': df[(df['source'] == 'MMLU') & (df['prob_distance'] > 0)]
+}
 for ax, (label, data) in zip(axes, subsets.items()):
     sns.kdeplot(data=data, x='prob_distance', fill=True, color='steelblue', ax=ax)
     ax.set_title(label)
