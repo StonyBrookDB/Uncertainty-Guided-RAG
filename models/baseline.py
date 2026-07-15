@@ -1,6 +1,6 @@
 """
-llama_v1: 3 errors
-llama_v2: 1 error/273 errors
+llama_v1: 3/0 errrors
+llama_v2: 1 error/3 errors
 mistral: 15 errors
 Prompts:
 - - - - - v1 - - - - -
@@ -27,7 +27,13 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import pandas as pd
 import time as t
+
+# Misc
+INSTRUCTIONS = """You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
+The question is provided below, along with four answer options labeled A, B, C, and D. 
+Your goal is to select the most appropriate answer based on your medical knowledge and reasoning, as well as any additional context provided. """
 errors = 0
+
 model_name = "meta-llama/Llama-3.1-8B-Instruct"
 # model_name = "mistralai/Mistral-7B-Instruct-v0.3"
 tokenizer = AutoTokenizer.from_pretrained(model_name, dtype=torch.float16, device_map="auto")

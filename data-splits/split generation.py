@@ -1,10 +1,15 @@
+"""
+v1: seed 12
+v2: validation, seed 24
+"""
+
 import pandas as pd
 from datasets import load_dataset
 from collections import defaultdict
 
 # 20 questions over 20 subjects, 5 splits
-dataset = load_dataset("openlifescienceai/medmcqa", split="train")
-shuffled_dataset = dataset.shuffle(seed=12)
+dataset = load_dataset("openlifescienceai/medmcqa", split="validation")
+shuffled_dataset = dataset.shuffle(seed=24)
 
 questions = defaultdict(list)
 
@@ -43,7 +48,7 @@ questions = [[] for i in range(5)]
 
 for s in subjects:
     dataset = load_dataset("ekacare/mmlu-medical-mcqs-evaluation-dataset", s, split = "test")
-    shuffled_dataset = dataset.shuffle(seed=12)
+    shuffled_dataset = dataset.shuffle(seed=24)
     for i in range(90):
         questions[i % 5].append(shuffled_dataset[i])
         questions[i % 5][-1]["subject"] = s

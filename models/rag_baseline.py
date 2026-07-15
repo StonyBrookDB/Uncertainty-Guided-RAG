@@ -1,13 +1,16 @@
 """
 llama_1.2.5: 2 errors
-llama_1.2.3:
-llama_1.2.1:
-llama_2.2.5: 10 errors
-llama_2.2.3: 8 errors
+llama_1.2.3: 1 error
+llama_2.2.5: 18 errors
+llama_2.2.3: 15 errors
 llama_2.2.1: 0 errors
 llama_2.3.5: 3 errors
 llama_2.3.3: 2 errors
 llama_2.3.1: 0 errors
+2.2: 12 errors
+1.1: 2 errors
+1.2: 0 errors
+
 prompt.embedding.top_k
 - - - - - v1 - - - - - 
 You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
@@ -43,8 +46,6 @@ B)
 C)
 D)
 Answer only with the letter of the correct option. Answer: 
-- - - - - v3 - - - - -
-Question:
 """
 
 from pymilvus import MilvusClient
@@ -60,7 +61,6 @@ INSTRUCTIONS = """You are a helpful medical expert, and your task is to answer a
 The question is provided below, along with four answer options labeled A, B, C, and D. 
 Your goal is to select the most appropriate answer based on your medical knowledge and reasoning, as well as any additional context provided. """
 error = 0
-TOP_K = 3
 
 # Milvus connect
 client = MilvusClient(uri="http://localhost:19530")
@@ -70,12 +70,9 @@ client.load_collection("MedRAG_pubmed_collection")
 
 # AI Model
 model_name = "meta-llama/Llama-3.1-8B-Instruct"
-# model_name = "mistralai/Mistral-7B-Instruct-v0.3"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto")
 model.eval()
-
-# Embedding model
 embedding_model = SentenceTransformer("BAAI/bge-base-en-v1.5", trust_remote_code=True, device="cuda")
 
 # Map options to token IDs
@@ -83,6 +80,7 @@ option_tokens = {"A": tokenizer.encode(" A", add_special_tokens=False)[0],
                  "B": tokenizer.encode(" B", add_special_tokens=False)[0],
                  "C": tokenizer.encode(" C", add_special_tokens=False)[0],
                  "D": tokenizer.encode(" D", add_special_tokens=False)[0]}
+
 COLLECTIONS = ["MedRAG_textbook_collection", "MedRAG_statpearls_collection", "MedRAG_pubmed_collection"]
 def get_context(prompt):
     query_embedding = embedding_model.encode(prompt, normalize_embeddings=True).tolist()
@@ -91,7 +89,7 @@ def get_context(prompt):
         query = client.search(
             collection_name=c,
             data=[query_embedding],
-            limit=TOP_K,
+            limit=5,
             output_fields=["id", "source", "content"],
             search_params={
                 "metric_type": "COSINE",
@@ -109,7 +107,7 @@ def get_context(prompt):
             "content": r["entity"].get("content")
         })
 
-    results = sorted(results, key=lambda x: x["score"], reverse=True)[:TOP_K]
+    results = sorted(results, key=lambda x: x["score"], reverse=True)[:5]
     return "\n\n".join([f"{r['content']}" for r in results]), results
 
 # Keys: ["id", "question", "opa", "opb", "opc", "opd", "cop", "choice_type", "exp", "subject_name", "topic_name"]
@@ -121,7 +119,8 @@ B) {q["opb"]}
 C) {q["opc"]}
 D) {q["opd"]}
     """)
-    prompt = f"""Context:
+    prompt = f"""{INSTRUCTIONS}
+Context:
 {context}
 Question: {q["question"]}
     A) {q["opa"]}
@@ -166,7 +165,8 @@ B) {options[1]}
 C) {options[2]}
 D) {options[3]}""")
                                         
-    prompt = f"""Context:
+    prompt = f"""{INSTRUCTIONS}
+Context:
 {context}
 Question: {q["centerpiece"]}
     A) {options[0]}

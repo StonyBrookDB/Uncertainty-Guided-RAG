@@ -6,13 +6,13 @@ import ast
 # Load CSV
 all_dfs = []
 for i in range(1, 6):
-    df = pd.read_csv(f"medmcqa_results_{i}.csv")
+    df = pd.read_csv(f"results-and-visualizations/rag_baseline_v2/2.2_results/medmcqa_results_{i}.csv")
     df['source'] = 'MEDMCQA'
     df['split'] = i
     all_dfs.append(df)
 
 for i in range(1, 6):
-    df = pd.read_csv(f"mmlu_results_{i}.csv")
+    df = pd.read_csv(f"results-and-visualizations/rag_baseline_v2/2.2_results/mmlu_results_{i}.csv")
     df['source'] = 'MMLU'
     df['split'] = i
     all_dfs.append(df)
@@ -206,26 +206,43 @@ plt.show()
 # Number of uncertain options
 df['result'] = df['result'].astype(bool)
 df['num_within'] = (df[['probA', 'probB', 'probC', 'probD']] >= (df['max_prob'] - 0.2).values[:, None]).sum(axis=1)
+prob_cols = ['probA', 'probB', 'probC', 'probD']
+letter_map = {'probA': 'A', 'probB': 'B', 'probC': 'C', 'probD': 'D'}
 
-grouped = (df.groupby(['num_within', 'result']).size().reset_index(name='count'))
-grouped['percentage'] = (grouped.groupby('num_within')['count'].transform(lambda x: x / x.sum() * 100))
+close_mask = df[prob_cols].ge(df['max_prob'] - 0.2, axis=0)
+df['close_letters'] = close_mask.apply(lambda row: [letter_map[col] for col in close_mask.columns[row]], axis=1)
 
-pivot = (grouped.pivot(index='num_within', columns='result', values='percentage').fillna(0).reindex(index=range(1, 5), fill_value=0))
-pivot = pivot.rename(columns={False: 'Incorrect', True: 'Correct'})
+df['correct_in_close'] = df.apply(lambda row: row['answer'] in row['close_letters'], axis=1)
+
+def categorize(row):
+    if row['result']:
+        return 'Correct'
+    elif row['correct_in_close']:
+        return 'Incorrect - Correct in close'
+    else:
+        return 'Incorrect - Correct not in close'
+
+df['outcome_category'] = df.apply(categorize, axis=1)
+
+grouped = (df.groupby(['num_within', 'outcome_category']).size().reset_index(name='count'))
+grouped['percentage'] = grouped.groupby('num_within')['count'].transform(lambda x: x / x.sum() * 100)
+
+pivot = grouped.pivot(index='num_within', columns='outcome_category', values='percentage').fillna(0)
+
+cats = ['Correct', 'Incorrect - Correct in close', 'Incorrect - Correct not in close']
+for cat in cats:
+    if cat not in pivot.columns:
+        pivot[cat] = 0
+pivot = pivot[cats]
+
+pivot = pivot.reindex(index=range(1, 5), fill_value=0)
 fig, ax = plt.subplots(figsize=(8, 6))
-pivot[['Incorrect', 'Correct']].plot(
-    kind='bar',
-    stacked=True,
-    ax=ax,
-    color=['red', 'blue'],
-    edgecolor='black'
-)
+pivot.plot(kind='bar', stacked=True, ax=ax, color=['blue', 'green', 'red'], edgecolor='black')
 
 ax.set_xlabel('Number of options within 0.2 of maximum probability')
 ax.set_ylabel('Percentage (%)')
 ax.set_title('Outcome by Number of Close Options')
 ax.legend(title='Outcome')
-ax.axhline(y=50, color='gray', linestyle='--', alpha=0.7)
 ax.grid(axis='y', alpha=0.3)
 ax.set_ylim(0, 105)
 ax.set_xticklabels([str(i) for i in range(1, 5)], rotation=0)
@@ -324,4 +341,25 @@ for i, conf in enumerate(crosstab.index):
 
 plt.tight_layout()
 plt.savefig('similarity_analysis.png', dpi=300, bbox_inches='tight')
+plt.show()
+
+# Distance from max probability
+df['max_prob'] = df[prob_cols].max(axis=1)
+
+def get_prob(answer, row):
+    return row[f'prob{answer}']
+df['correct_prob'] = df.apply(lambda row: get_prob(row['answer'], row), axis=1)
+df['prob_distance'] = df['max_prob'] - df['correct_prob']
+
+fig, axes = plt.subplots(1, 3, figsize=(15, 5), sharex=True, sharey=True)
+subsets = {'All Data': df, 'MEDMCQA': df[df['source'] == 'MEDMCQA'], 'MMLU': df[df['source'] == 'MMLU']}
+for ax, (label, data) in zip(axes, subsets.items()):
+    sns.kdeplot(data=data, x='prob_distance', fill=True, color='steelblue', ax=ax)
+    ax.set_title(label)
+    ax.set_xlabel('Distance from max probability (max - prob_correct)')
+    ax.set_ylabel('Relative density')
+    ax.grid(alpha=0.3)
+    ax.set_xlim(0, data['prob_distance'].quantile(0.99))
+plt.tight_layout()
+plt.savefig("prob_distance.png", dpi=300, bbox_inches='tight')
 plt.show()
