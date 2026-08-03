@@ -6,13 +6,13 @@ import ast
 # Load CSV
 all_dfs = []
 for i in range(1, 6):
-    df = pd.read_csv(f"results-and-visualizations/rag_baseline_v2/1.2_results/medmcqa_results_{i}.csv")
+    df = pd.read_csv(f"medmcqa_results_{i}.csv")
     df['source'] = 'MEDMCQA'
     df['split'] = i
     all_dfs.append(df)
 
 for i in range(1, 6):
-    df = pd.read_csv(f"results-and-visualizations/rag_baseline_v2/1.2_results/mmlu_results_{i}.csv")
+    df = pd.read_csv(f"mmlu_results_{i}.csv")
     df['source'] = 'MMLU'
     df['split'] = i
     all_dfs.append(df)
@@ -344,7 +344,6 @@ plt.savefig('similarity_analysis.png', dpi=300, bbox_inches='tight')
 plt.show()
 
 # Distance from max probability
-df['max_prob'] = df[prob_cols].max(axis=1)
 
 def get_prob(answer, row):
     return row[f'prob{answer}']

@@ -1,53 +1,39 @@
 """
-llama_v1: 3/0 errrors
-llama_v2: 1 error/3 errors
-mistral: 15 errors
-Prompts:
-- - - - - v1 - - - - -
-You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
-The question is provided below, along with four answer options labeled A, B, C, and D. 
-Your goal is to select the most appropriate answer based on your medical knowledge and reasoning.
-Question:
-A)
-B)
-C)
-D)
-Answer only with the letter of the correct option. Answer: 
-- - - - - v2 - - - - -
-Question:
-A)
-B)
-C)
-D)
-Answer only with the letter of the correct option. Answer: 
+llama3.1_v1: 0 errrors
+llama3.1_v2: 3 errors
+v1 -> instructions
+v2 -> no instructions
 """
 
+# region Imports
 import ast
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import pandas as pd
 import time as t
+# endregion
 
-# Misc
+# region Models
+model_name = "meta-llama/Llama-3.1-8B-Instruct"
+tokenizer = AutoTokenizer.from_pretrained(model_name, device_map="cuda")
+model = AutoModelForCausalLM.from_pretrained(model_name, device_map="cuda")
+model.eval()
+# endregion
+
+# region Constants
+option_tokens = {"A": tokenizer.encode("A", add_special_tokens=False)[0],
+                 "B": tokenizer.encode("B", add_special_tokens=False)[0],
+                 "C": tokenizer.encode("C", add_special_tokens=False)[0],
+                 "D": tokenizer.encode("D", add_special_tokens=False)[0]}
+
 INSTRUCTIONS = """You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
 The question is provided below, along with four answer options labeled A, B, C, and D. 
 Your goal is to select the most appropriate answer based on your medical knowledge and reasoning, as well as any additional context provided. """
 errors = 0
-
-model_name = "meta-llama/Llama-3.1-8B-Instruct"
-# model_name = "mistralai/Mistral-7B-Instruct-v0.3"
-tokenizer = AutoTokenizer.from_pretrained(model_name, dtype=torch.float16, device_map="auto")
-model = AutoModelForCausalLM.from_pretrained(model_name, dtype=torch.float16, device_map="auto")
-model.eval()
-
-# Map options to token IDs
-option_tokens = {"A": tokenizer.encode(" A", add_special_tokens=False)[0],
-                 "B": tokenizer.encode(" B", add_special_tokens=False)[0],
-                 "C": tokenizer.encode(" C", add_special_tokens=False)[0],
-                 "D": tokenizer.encode(" D", add_special_tokens=False)[0]}
+# endregion
 
 # Keys: ["id", "question", "opa", "opb", "opc", "opd", "cop", "choice_type", "exp", "subject_name", "topic_name"]
-def eval_medmcqa(q): # [probA, probB, probC, probD]
+def eval_medmcqa(q):
 
     prompt = f"""Question: {q["question"]}
     A) {q["opa"]}
@@ -76,24 +62,22 @@ Answer only with the letter of the correct option. Answer: """
         global errors
         errors += 1
 
-    # Print model response
-    # with torch.no_grad():
-    #     generated = model.generate(**inputs,max_new_tokens=5)
-    # print(tokenizer.decode(generated[0], skip_special_tokens=True))
-
     return torch.softmax(option_logits, dim=0).tolist() + [end - start]
 
 # Keys: ["centerpiece", "options", "correct_options", "correct_options_idx", "correct_options_literal", "subject", "id"]
-def eval_mmlu(q): # [probA, probB, probC, probD]
-    options = ast.literal_eval(q["options"])
-    prompt = f"""Question: {q["centerpiece"]}
-    A) {options[0]}
-    B) {options[1]}
-    C) {options[2]}
-    D) {options[3]}
+def eval_mmlu(q):
+    messages = [
+        {"role": "system", "content": INSTRUCTIONS},
+        {"role": "user", "content": f"""Question: {q["centerpiece"]}
+    A) {q["options"][0]}
+    B) {q["options"][1]}
+    C) {q["options"][2]}
+    D) {q["options"][3]}
 Answer only with the letter of the correct option. Answer: """
+        }
+    ]
     start = t.time()
-    inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
+    inputs = tokenizer(tokenizer.apply_chat_template(messages, tokenize=False), return_tensors="pt").to("cuda")
     with torch.no_grad():
         outputs = model(**inputs, return_dict=True)
     end = t.time()

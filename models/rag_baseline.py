@@ -1,53 +1,18 @@
 """
-llama_1.2.5: 2 errors
-llama_1.2.3: 1 error
-llama_2.2.5: 18 errors
-llama_2.2.3: 15 errors
-llama_2.2.1: 0 errors
-llama_2.3.5: 3 errors
-llama_2.3.3: 2 errors
-llama_2.3.1: 0 errors
-2.2: 12 errors
-1.1: 2 errors
-1.2: 0 errors
+2.2: 
+1.1: 2
+1.2: 0
+RR: 0
+NPB: 0
 
-prompt.embedding.top_k
-- - - - - v1 - - - - - 
-You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
-The question is provided below, along with four answer options labeled A, B, C, and D. 
-Your goal is to select the most appropriate answer based on your medical knowledge and reasoning.
-Question:
-A)
-B)
-C)
-D)
-Answer only with the letter of the correct option. Answer: 
-- - - - - v2 - - - - -
-Question:
-A)
-B)
-C)
-D)
-Answer only with the letter of the correct option. Answer: 
-- - - - - v1 - - - - - 
-You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
-The question is provided below, along with four answer options labeled A, B, C, and D. 
-Your goal is to select the most appropriate answer based on your medical knowledge and reasoning.
-Question:
-A)
-B)
-C)
-D)
-Answer only with the letter of the correct option. Answer: 
-- - - - - v2 - - - - -
-Question:
-A)
-B)
-C)
-D)
-Answer only with the letter of the correct option. Answer: 
+prompt.embedding
+v1 - instructions
+v2 - no instructions
+NPB - no pubmed
+RR - reranker, takes top 10 from each and choses top 5
 """
 
+# region Imports
 from pymilvus import MilvusClient
 import ast
 import torch
@@ -55,33 +20,72 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import pandas as pd
 import time as t
 from sentence_transformers import SentenceTransformer
+from sentence_transformers import CrossEncoder
+# endregion
 
-# Misc
-INSTRUCTIONS = """You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
-The question is provided below, along with four answer options labeled A, B, C, and D. 
-Your goal is to select the most appropriate answer based on your medical knowledge and reasoning, as well as any additional context provided. """
-error = 0
-
-# Milvus connect
+# region Milvus Connect
 client = MilvusClient(uri="http://localhost:19530")
 client.load_collection("MedRAG_textbook_collection")
 client.load_collection("MedRAG_statpearls_collection")
 client.load_collection("MedRAG_pubmed_collection")
+# endregion
 
-# AI Model
+# region Models
 model_name = "meta-llama/Llama-3.1-8B-Instruct"
+reranker = reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', device='cuda')
 tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto")
+model = AutoModelForCausalLM.from_pretrained(model_name, device_map="cuda")
 model.eval()
 embedding_model = SentenceTransformer("BAAI/bge-base-en-v1.5", trust_remote_code=True, device="cuda")
+# endregion
 
-# Map options to token IDs
+# region Constants
 option_tokens = {"A": tokenizer.encode(" A", add_special_tokens=False)[0],
                  "B": tokenizer.encode(" B", add_special_tokens=False)[0],
                  "C": tokenizer.encode(" C", add_special_tokens=False)[0],
                  "D": tokenizer.encode(" D", add_special_tokens=False)[0]}
-
 COLLECTIONS = ["MedRAG_textbook_collection", "MedRAG_statpearls_collection", "MedRAG_pubmed_collection"]
+INSTRUCTIONS = """You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
+The question is provided below, along with four answer options labeled A, B, C, and D. 
+Your goal is to select the most appropriate answer based on your medical knowledge and reasoning, as well as any additional context provided. """
+error = 0
+# endregion
+
+# Reranker
+# def get_context(prompt):
+#     query_embedding = embedding_model.encode(prompt, normalize_embeddings=True).tolist()
+#     search = []
+#     for c in COLLECTIONS:
+#         query = client.search(
+#             collection_name=c,
+#             data=[query_embedding],
+#             limit=10,
+#             output_fields=["id", "source", "content"],
+#             search_params={
+#                 "metric_type": "COSINE",
+#                 "params": {}
+#             }
+#         )
+#         search.extend(query[0])
+
+#     results = []
+#     for r in search:
+#         results.append({
+#             "score": r["distance"],
+#             "id": r["id"],
+#             "source": r["entity"].get("source"),
+#             "content": r["entity"].get("content")
+#         })
+
+#     pairs = [(prompt, r["content"]) for r in results]
+#     rerank_scores = reranker.predict(pairs, show_progress_bar=False, batch_size=len(COLLECTIONS) * 10)
+#     for r, score in zip(results, rerank_scores):
+#         r["rerank_score"] = score
+
+#     results = sorted(results, key=lambda x: x["rerank_score"], reverse=True)[:5]
+#     return "\n\n".join([f"{r['content']}" for r in results]), results
+
+# No reranker
 def get_context(prompt):
     query_embedding = embedding_model.encode(prompt, normalize_embeddings=True).tolist()
     search = []
@@ -117,10 +121,9 @@ def eval_medmcqa(q): # [probA, probB, probC, probD, time, search_results]
 A) {q["opa"]}
 B) {q["opb"]}
 C) {q["opc"]}
-D) {q["opd"]}
-    """)
-    prompt = f"""{INSTRUCTIONS}
-Context:
+D) {q["opd"]}""")
+
+    prompt = f"""Context:
 {context}
 Question: {q["question"]}
     A) {q["opa"]}
@@ -165,8 +168,7 @@ B) {options[1]}
 C) {options[2]}
 D) {options[3]}""")
                                         
-    prompt = f"""{INSTRUCTIONS}
-Context:
+    prompt = f"""Context:
 {context}
 Question: {q["centerpiece"]}
     A) {options[0]}
@@ -199,13 +201,12 @@ Answer only with the letter of the correct option. Answer: """
 
 # Warmup
 print("Warming up model")
-warmup_prompt = """
-    Question: What is the capital of France?
+warmup_prompt = """Question: What is the capital of France?
     A) London
     B) Paris
     C) Berlin
     D) Madrid
-    Provide the answer as a single letter (A, B, C, or D).
+Provide the answer as a single letter (A, B, C, or D).
 """
 
 warmup_inputs = tokenizer(warmup_prompt, return_tensors="pt").to("cuda")
