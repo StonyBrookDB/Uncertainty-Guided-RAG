@@ -8,11 +8,14 @@ NPB: 0
 prompt.embedding
 v1 - instructions
 v2 - no instructions
+v3 - structured
 NPB - no pubmed
 RR - reranker, takes top 10 from each and choses top 5
 """
 
 # region Imports
+from pyexpat.errors import messages
+
 from pymilvus import MilvusClient
 import ast
 import torch
@@ -40,50 +43,51 @@ embedding_model = SentenceTransformer("BAAI/bge-base-en-v1.5", trust_remote_code
 # endregion
 
 # region Constants
-option_tokens = {"A": tokenizer.encode(" A", add_special_tokens=False)[0],
-                 "B": tokenizer.encode(" B", add_special_tokens=False)[0],
-                 "C": tokenizer.encode(" C", add_special_tokens=False)[0],
-                 "D": tokenizer.encode(" D", add_special_tokens=False)[0]}
+option_tokens = {"A": tokenizer.encode("A", add_special_tokens=False)[0],
+                 "B": tokenizer.encode("B", add_special_tokens=False)[0],
+                 "C": tokenizer.encode("C", add_special_tokens=False)[0],
+                 "D": tokenizer.encode("D", add_special_tokens=False)[0]}
 COLLECTIONS = ["MedRAG_textbook_collection", "MedRAG_statpearls_collection", "MedRAG_pubmed_collection"]
 INSTRUCTIONS = """You are a helpful medical expert, and your task is to answer a multi-choice medical question. 
 The question is provided below, along with four answer options labeled A, B, C, and D. 
-Your goal is to select the most appropriate answer based on your medical knowledge and reasoning, as well as any additional context provided. """
+Your goal is to select the most appropriate answer based on your medical knowledge and reasoning, as well as any additional context provided. 
+Output your answer as a single letter first. Then on a new line, briefly explain why the context led you to believe that answer is correct. Include which paragraph number was most helpful."""
 error = 0
 # endregion
 
 # Reranker
 # def get_context(prompt):
-#     query_embedding = embedding_model.encode(prompt, normalize_embeddings=True).tolist()
-#     search = []
-#     for c in COLLECTIONS:
-#         query = client.search(
-#             collection_name=c,
-#             data=[query_embedding],
-#             limit=10,
-#             output_fields=["id", "source", "content"],
-#             search_params={
-#                 "metric_type": "COSINE",
-#                 "params": {}
-#             }
-#         )
-#         search.extend(query[0])
+    # query_embedding = embedding_model.encode(prompt, normalize_embeddings=True).tolist()
+    # search = []
+    # for c in COLLECTIONS:
+    #     query = client.search(
+    #         collection_name=c,
+    #         data=[query_embedding],
+    #         limit=10,
+    #         output_fields=["id", "source", "content"],
+    #         search_params={
+    #             "metric_type": "COSINE",
+    #             "params": {}
+    #         }
+    #     )
+    #     search.extend(query[0])
 
-#     results = []
-#     for r in search:
-#         results.append({
-#             "score": r["distance"],
-#             "id": r["id"],
-#             "source": r["entity"].get("source"),
-#             "content": r["entity"].get("content")
-#         })
+    # results = []
+    # for r in search:
+    #     results.append({
+    #         "score": r["distance"],
+    #         "id": r["id"],
+    #         "source": r["entity"].get("source"),
+    #         "content": r["entity"].get("content")
+    #     })
 
-#     pairs = [(prompt, r["content"]) for r in results]
-#     rerank_scores = reranker.predict(pairs, show_progress_bar=False, batch_size=len(COLLECTIONS) * 10)
-#     for r, score in zip(results, rerank_scores):
-#         r["rerank_score"] = score
+    # pairs = [(prompt, r["content"]) for r in results]
+    # rerank_scores = reranker.predict(pairs, show_progress_bar=False, batch_size=len(COLLECTIONS) * 10)
+    # for r, score in zip(results, rerank_scores):
+    #     r["rerank_score"] = score
 
-#     results = sorted(results, key=lambda x: x["rerank_score"], reverse=True)[:5]
-#     return "\n\n".join([f"{r['content']}" for r in results]), results
+    # results = sorted(results, key=lambda x: x["rerank_score"], reverse=True)[:5]
+    # return "\n\n".join([f"{r['content']}" for r in results]), results
 
 # No reranker
 def get_context(prompt):
@@ -123,15 +127,18 @@ B) {q["opb"]}
 C) {q["opc"]}
 D) {q["opd"]}""")
 
-    prompt = f"""Context:
+    messages = [
+        {"role": "system", "content": INSTRUCTIONS},
+        {"role": "user", "content": f"""Context: 
 {context}
 Question: {q["question"]}
     A) {q["opa"]}
     B) {q["opb"]}
     C) {q["opc"]}
     D) {q["opd"]}
-Answer only with the letter of the correct option. Answer: """
-    inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
+Answer only with the letter of the correct option. Answer: """}
+    ]
+    inputs = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt = True, return_tensors="pt").to("cuda")
     with torch.no_grad():
         outputs = model(**inputs, return_dict=True)
     end = t.time()
@@ -151,10 +158,10 @@ Answer only with the letter of the correct option. Answer: """
         global error
         error += 1
 
-    # Print model response
-    # with torch.no_grad():
-    #     generated = model.generate(**inputs,max_new_tokens=5)
-    # print(tokenizer.decode(generated[0], skip_special_tokens=True))
+        # Print model response
+        with torch.no_grad():
+            generated = model.generate(**inputs,max_new_tokens=100)
+        print(tokenizer.decode(generated[0], skip_special_tokens=True))
 
     return torch.softmax(option_logits, dim=0).tolist() + [end - start] + [search_results]
 
@@ -168,16 +175,19 @@ B) {options[1]}
 C) {options[2]}
 D) {options[3]}""")
                                         
-    prompt = f"""Context:
+    messages = [
+        {"role": "system", "content": INSTRUCTIONS},
+        {"role": "user", "content": f"""Context: 
 {context}
 Question: {q["centerpiece"]}
     A) {options[0]}
     B) {options[1]}
     C) {options[2]}
     D) {options[3]}
-Answer only with the letter of the correct option. Answer: """
+Answer only with the letter of the correct option. Answer: """}
+    ]
     
-    inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
+    inputs = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt = True, return_tensors="pt").to("cuda")
     with torch.no_grad():
         outputs = model(**inputs, return_dict=True)
     end = t.time()

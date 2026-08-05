@@ -1,8 +1,10 @@
 """
-llama3.1_v1: 0 errrors
-llama3.1_v2: 3 errors
+v1: 0 errrors
+v2: 3 errors
+v3: 1 error, good catch
 v1 -> instructions
 v2 -> no instructions
+v3 -> chat template
 """
 
 # region Imports
@@ -35,15 +37,18 @@ errors = 0
 # Keys: ["id", "question", "opa", "opb", "opc", "opd", "cop", "choice_type", "exp", "subject_name", "topic_name"]
 def eval_medmcqa(q):
 
-    prompt = f"""Question: {q["question"]}
+    messages = [
+        {"role": "system", "content": INSTRUCTIONS},
+        {"role": "user", "content": f"""Question: {q["question"]}
     A) {q["opa"]}
     B) {q["opb"]}
     C) {q["opc"]}
     D) {q["opd"]}
-Answer only with the letter of the correct option. Answer: """
+Answer only with the letter of the correct option. Answer: """}
+    ]
     
     start = t.time()
-    inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
+    inputs = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt = True, return_tensors="pt").to("cuda")
     with torch.no_grad():
         outputs = model(**inputs, return_dict=True)
     end = t.time()
@@ -62,22 +67,28 @@ Answer only with the letter of the correct option. Answer: """
         global errors
         errors += 1
 
+        # Print model response
+        with torch.no_grad():
+            generated = model.generate(**inputs,max_new_tokens=100)
+        print(tokenizer.decode(generated[0], skip_special_tokens=True))
+
     return torch.softmax(option_logits, dim=0).tolist() + [end - start]
 
 # Keys: ["centerpiece", "options", "correct_options", "correct_options_idx", "correct_options_literal", "subject", "id"]
 def eval_mmlu(q):
+    options = ast.literal_eval(q["options"])
     messages = [
         {"role": "system", "content": INSTRUCTIONS},
         {"role": "user", "content": f"""Question: {q["centerpiece"]}
-    A) {q["options"][0]}
-    B) {q["options"][1]}
-    C) {q["options"][2]}
-    D) {q["options"][3]}
+    A) {options[0]}
+    B) {options[1]}
+    C) {options[2]}
+    D) {options[3]}
 Answer only with the letter of the correct option. Answer: """
         }
     ]
     start = t.time()
-    inputs = tokenizer(tokenizer.apply_chat_template(messages, tokenize=False), return_tensors="pt").to("cuda")
+    inputs = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt = True, return_tensors="pt").to("cuda")
     with torch.no_grad():
         outputs = model(**inputs, return_dict=True)
     end = t.time()
@@ -96,6 +107,10 @@ Answer only with the letter of the correct option. Answer: """
         print(f"Error, next token is not an option: {next_token_text}")
         global errors
         errors += 1
+
+        with torch.no_grad():
+            generated = model.generate(**inputs,max_new_tokens=100)
+            print(tokenizer.decode(generated[0], skip_special_tokens=True))
                                   
     return torch.softmax(option_logits, dim=0).tolist() + [end - start]
 

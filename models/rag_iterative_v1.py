@@ -22,7 +22,7 @@ client.load_collection("MedRAG_pubmed_collection")
 
 # region Models
 model_name = "meta-llama/Llama-3.1-8B-Instruct"
-reranker = reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', device='cuda')
+reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', device='cuda')
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForCausalLM.from_pretrained(model_name, device_map="cuda")
 model.eval()
@@ -35,7 +35,7 @@ option_tokens = {"A": tokenizer.encode(" A", add_special_tokens=False)[0],
                  "C": tokenizer.encode(" C", add_special_tokens=False)[0],
                  "D": tokenizer.encode(" D", add_special_tokens=False)[0]}
 COLLECTIONS = ["MedRAG_textbook_collection", "MedRAG_statpearls_collection", "MedRAG_pubmed_collection"]
-THRESHOLD = 0.2
+THRESHOLD = 0.3
 error = 0
 # endregion
 
@@ -301,7 +301,7 @@ for i in range(1, 6):
             "confident" : prob[6],
             "add_ids" : [r['id'] for r in prob[7]]
         })
-    df_split = pd.DataFrame(results, columns=["id", "subject", "probA", "probB", "probC", "probD", "result", "answer", "time", "split", "sources", "ids", "similarity"])
+    df_split = pd.DataFrame(results, columns=["id", "subject", "probA", "probB", "probC", "probD", "result", "answer", "time", "split", "sources", "ids", "similarity", "confident", "add_ids"])
     df_split.to_csv(f"medmcqa_results_{i}.csv", index=False)
 
 # MMLU
@@ -330,6 +330,6 @@ for i in range(1, 6):
             "confident" : prob[6],
             "add_ids" : [r['id'] for r in prob[7]]
         })
-    df_split = pd.DataFrame(results, columns=["id", "subject", "probA", "probB", "probC", "probD", "result", "answer", "time", "split", "sources", "ids", "similarity"])
+    df_split = pd.DataFrame(results, columns=["id", "subject", "probA", "probB", "probC", "probD", "result", "answer", "time", "split", "sources", "ids", "similarity", "confident", "add_ids"])
     df_split.to_csv(f"mmlu_results_{i}.csv", index=False)
 print(f"Total errors: {error}")

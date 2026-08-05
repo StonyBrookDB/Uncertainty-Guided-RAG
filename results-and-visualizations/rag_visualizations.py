@@ -2,6 +2,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import ast
+from collections import Counter
 
 # Load CSV
 all_dfs = []
@@ -365,4 +366,37 @@ for ax, (label, data) in zip(axes, subsets.items()):
     ax.set_xlim(0, data['prob_distance'].quantile(0.99))
 plt.tight_layout()
 plt.savefig("prob_distance.png", dpi=300, bbox_inches='tight')
+plt.show()
+
+# Frequency of sources
+def get_id_freq_distribution(data_subset):
+    id_counter = Counter()
+    for ids_str in data_subset['ids']:
+        ids_list = ast.literal_eval(ids_str) if isinstance(ids_str, str) else ids_str
+        id_counter.update(ids_list)
+    freq_count = Counter(id_counter.values())
+    return freq_count
+
+medmcqa_df = df[df['source'] == 'MEDMCQA']
+mmlu_df = df[df['source'] == 'MMLU']
+
+med_freq = get_id_freq_distribution(medmcqa_df)
+mmlu_freq = get_id_freq_distribution(mmlu_df)
+both_freq = get_id_freq_distribution(df)
+
+fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+for ax, freq_dict, title in zip(axes, [med_freq, mmlu_freq, both_freq],
+                                ['MEDMCQA', 'MMLU', 'Both']):
+    x = sorted(freq_dict.keys())
+    y = [freq_dict[k] for k in x]
+    ax.bar(x, y, color='skyblue', edgecolor='navy')
+    ax.set_xlabel('Number of times ID appears')
+    ax.set_ylabel('Number of unique IDs')
+    ax.set_title(title)
+    for i, v in enumerate(y):
+        ax.text(x[i], v + 0.5, str(v), ha='center', va='bottom', fontsize=9)
+
+plt.tight_layout()
+plt.savefig('id_frequency_distribution.png', dpi=300, bbox_inches='tight')
 plt.show()
