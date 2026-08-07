@@ -1,6 +1,6 @@
 """
-v1: llama3.1-8b-instruct
-v2: phi4-mini-instruct
+tmux: cntrl b then d to disconnect
+tmux attach to connect to the session
 """
 # region Imports
 from pymilvus import MilvusClient
@@ -38,7 +38,7 @@ COLLECTIONS = ["MedRAG_textbook_collection", "MedRAG_statpearls_collection", "Me
 INSTRUCTIONS = """You are a helpful medical expert, and your task is to answer a multi-choice medical question.
 The question is provided below, along with four answer options labeled A, B, C, and D.
 Your goal is to select the most appropriate answer based on your medical knowledge and reasoning, as well as any additional context provided."""
-THRESHOLD = 0.5
+THRESHOLD = 1
 error = 0
 # endregion
 
@@ -300,43 +300,52 @@ with torch.no_grad():
         _ = model(**warmup_inputs, return_dict=True)
 torch.cuda.synchronize()
 
+skip_df = pd.read_csv("skip.csv", header = None)
+skip_set = set(zip(skip_df[0].astype(str), skip_df[1].astype(str)))
+
 # MEDMCQA
-# print("Evaluating medmcqa splits")
-# for i in range(1, 6):
-#     results = []
-#     df = pd.read_csv(f"data-splits/medmcqa_{i}.csv")
-#     for n, q in enumerate(df.to_dict("records")):
-#         if (n + 1) % 100 == 0:
-#             print(f"Evaluated {n + 1} questions")
-#         prob = eval_medmcqa(q)
-#         results.append({
-#             "id" : q["id"],
-#             "subject" : q["subject_name"],
-#             "probA" : prob[0],
-#             "probB" : prob[1],
-#             "probC" : prob[2],
-#             "probD" : prob[3],
-#             "result" : q["cop"] == max(range(4), key=lambda x: prob[x]),
-#             "answer" : ["A", "B", "C", "D"][q["cop"]],
-#             "time" : prob[4],
-#             "split" : f"medmcqa_{i}",
-#             "sources" : [r["source"] for r in prob[5]],
-#             "ids" : [r["id"] for r in prob[5]],
-#             "similarity" : [r["score"] for r in prob[5]],
-#             "confident" : prob[6],
-#             "add_ids" : [r['id'] for r in prob[7]]
-#         })
-#     df_split = pd.DataFrame(results, columns=["id", "subject", "probA", "probB", "probC", "probD", "result", "answer", "time", "split", "sources", "ids", "similarity", "confident", "add_ids"])
-#     df_split.to_csv(f"medmcqa_results_{i}.csv", index=False)
+print("Evaluating medmcqa splits")
+for i in range(1, 6):
+    results = []
+    df = pd.read_csv(f"data-splits/medmcqa_{i}.csv")
+    for n, q in enumerate(df.to_dict("records")):
+        if (n + 1) % 100 == 0:
+            print(f"Evaluated {n + 1} questions")
+        if (str(q["id"]), str(q["subject_name"])) in skip_set:
+            print("Skipping question with id:", q["id"], "and subject:", q["subject_name"])
+            continue
+        prob = eval_medmcqa(q)
+        results.append({
+            "id" : q["id"],
+            "subject" : q["subject_name"],
+            "probA" : prob[0],
+            "probB" : prob[1],
+            "probC" : prob[2],
+            "probD" : prob[3],
+            "result" : q["cop"] == max(range(4), key=lambda x: prob[x]),
+            "answer" : ["A", "B", "C", "D"][q["cop"]],
+            "time" : prob[4],
+            "split" : f"medmcqa_{i}",
+            "sources" : [r["source"] for r in prob[5]],
+            "ids" : [r["id"] for r in prob[5]],
+            "similarity" : [r["score"] for r in prob[5]],
+            "confident" : prob[6],
+            "add_ids" : [r['id'] for r in prob[7]]
+        })
+    df_split = pd.DataFrame(results, columns=["id", "subject", "probA", "probB", "probC", "probD", "result", "answer", "time", "split", "sources", "ids", "similarity", "confident", "add_ids"])
+    df_split.to_csv(f"medmcqa_results_{i}.csv", index=False)
 
 # MMLU
 print("Evaluating mmlu splits")
-for i in range(4, 6):
+for i in range(1, 6):
     results = []
     df = pd.read_csv(f"data-splits/mmlu_{i}.csv")
     for n, q in enumerate(df.to_dict("records")):
         if (n + 1) % 100 == 0:
             print(f"Evaluated {n + 1} questions")
+        if (str(q["id"]), str(q["subject"])) in skip_set:
+            print("Skipping question with id:", q["id"], "and subject:", q["subject"])
+            continue
         prob = eval_mmlu(q)
         results.append({
             "id" : q["id"],

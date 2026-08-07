@@ -5,13 +5,13 @@ import seaborn as sns
 # Load CSV
 all_dfs = []
 for i in range(1, 6):
-    df = pd.read_csv(f"medmcqa_results_{i}.csv")
+    df = pd.read_csv(f"medmcqa_{i}.csv")
     df['source'] = 'MEDMCQA'
     df['split'] = i
     all_dfs.append(df)
 
 for i in range(1, 6):
-    df = pd.read_csv(f"mmlu_results_{i}.csv")
+    df = pd.read_csv(f"mmlu_{i}.csv")
     df['source'] = 'MMLU'
     df['split'] = i
     all_dfs.append(df)

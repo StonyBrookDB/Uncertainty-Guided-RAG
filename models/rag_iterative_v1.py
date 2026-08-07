@@ -35,7 +35,7 @@ option_tokens = {"A": tokenizer.encode(" A", add_special_tokens=False)[0],
                  "C": tokenizer.encode(" C", add_special_tokens=False)[0],
                  "D": tokenizer.encode(" D", add_special_tokens=False)[0]}
 COLLECTIONS = ["MedRAG_textbook_collection", "MedRAG_statpearls_collection", "MedRAG_pubmed_collection"]
-THRESHOLD = 0.3
+THRESHOLD = 0.55
 error = 0
 # endregion
 
