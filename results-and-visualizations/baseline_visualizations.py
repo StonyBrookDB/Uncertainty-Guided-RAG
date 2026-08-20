@@ -1,109 +1,71 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import numpy as np
 
-# Load CSV
-all_dfs = []
-for i in range(1, 6):
-    df = pd.read_csv(f"medmcqa_{i}.csv")
-    df['source'] = 'MEDMCQA'
-    df['split'] = i
-    all_dfs.append(df)
+# Read both dataframes
+mcqa_df = pd.read_csv("medmcqa_results.csv")   # 4 options (probA‑D)
+qa_df   = pd.read_csv("medqa_results.csv")     # 5 options (probA‑E)
 
-for i in range(1, 6):
-    df = pd.read_csv(f"mmlu_{i}.csv")
-    df['source'] = 'MMLU'
-    df['split'] = i
-    all_dfs.append(df)
-df = pd.concat(all_dfs, ignore_index=True)
+# Add missing probE column to the 4‑option dataframe
+mcqa_df['probE'] = 0.0
 
-# Confidence Classifier
+# Combine into one DataFrame
+df = pd.concat([mcqa_df, qa_df], ignore_index=True)
+
+# ---- Compute derived columns ----
+prob_cols = ['probA', 'probB', 'probC', 'probD', 'probE']
 THRESHOLD = [0, 0.40, 0.70, 0.90, 1.01]
 labels = ['Low', 'Medium', 'High', 'Very High']
-df['confidence'] = pd.cut(df[['probA', 'probB', 'probC', 'probD']].max(axis=1), bins=THRESHOLD, labels=labels, right=False)
 
-# Choice Classifier
-prob_cols = ['probA', 'probB', 'probC', 'probD']
+df['confidence'] = pd.cut(df[prob_cols].max(axis=1),
+                          bins=THRESHOLD, labels=labels, right=False)
 df['choice'] = df[prob_cols].idxmax(axis=1).str.extract(r'prob(\w)')[0]
+df['result'] = df[prob_cols].values.argmax(axis=1) == df['answer']
 
-# Maximum probability
-df['max_prob'] = df[['probA', 'probB', 'probC', 'probD']].max(axis=1)
+answer_map = {0: 'A', 1: 'B', 2: 'C', 3: 'D', 4: 'E'}
+df['answer_letter'] = df['answer'].map(answer_map)
+df['p_top1'] = df[prob_cols].max(axis=1)
+df['p_ans'] = df[prob_cols].values[range(len(df)), df['answer'].values]
+df['margin'] = df['p_top1'] - df['p_ans']
 
-# Pie Charts for answer choices
+# Split by source (adjust source names as needed)
+medmcqa_df = df[df['source'].str.lower() == 'medmcqa']
+medqa_df   = df[df['source'].str.lower() == 'medqa']   # or 'mmlu' if that's the case
+
+# ---- 1. Pie Charts (Answers & Predictions) ----
 data_list = [
-    (df['answer'].value_counts().reindex(['A','B','C','D'], fill_value=0), "Answers (Overall)"),
-    (df[df['source']=='MEDMCQA']['answer'].value_counts().reindex(['A','B','C','D'], fill_value=0), "Answers (MEDMCQA)"),
-    (df[df['source']=='MMLU']['answer'].value_counts().reindex(['A','B','C','D'], fill_value=0), "Answers (MMLU)"),
-    (df['choice'].value_counts().reindex(['A','B','C','D'], fill_value=0), "Predictions (Overall)"),
-    (df[df['source']=='MEDMCQA']['choice'].value_counts().reindex(['A','B','C','D'], fill_value=0), "Predictions (MEDMCQA)"),
-    (df[df['source']=='MMLU']['choice'].value_counts().reindex(['A','B','C','D'], fill_value=0), "Predictions (MMLU)"),
+    (medmcqa_df['answer_letter'].value_counts().reindex(['A','B','C','D','E'], fill_value=0),
+     "Answers (MEDMCQA)"),
+    (medqa_df['answer_letter'].value_counts().reindex(['A','B','C','D','E'], fill_value=0),
+     "Answers (MEDQA)"),
+    (medmcqa_df['choice'].value_counts().reindex(['A','B','C','D','E'], fill_value=0),
+     "Predictions (MEDMCQA)"),
+    (medqa_df['choice'].value_counts().reindex(['A','B','C','D','E'], fill_value=0),
+     "Predictions (MEDQA)"),
 ]
 
-fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+fig, axes = plt.subplots(2, 2, figsize=(10, 10))
 axes = axes.flatten()
-colors = ['#ff9999','#66b3ff','#99ff99','#ffcc99']
+colors = ['#ff9999','#66b3ff','#99ff99','#ffcc99','#c2c2f0']  # added 5th colour
 
 for ax, (counts, title) in zip(axes, data_list):
     ax.pie(counts, labels=counts.index, autopct='%1.1f%%',
-           startangle=90, colors=colors)
+           startangle=90, colors=colors[:len(counts)])
     ax.set_title(f"{title} (n={sum(counts)})")
     ax.axis('equal')
 
 plt.tight_layout()
 plt.savefig('answer_pie_charts.png', bbox_inches='tight')
-plt.show()
+plt.close()
 
-# Accuracy by Subject
-medmcqa_df = df[df['source'] == 'MEDMCQA']
-mmlu_df = df[df['source'] == 'MMLU']
-
-medmcqa_split_acc = medmcqa_df.groupby(['subject', 'split'])['result'].mean().reset_index()
-medmcqa_split_acc.columns = ['subject', 'split', 'acc']
-medmcqa_stats = medmcqa_split_acc.groupby('subject')['acc'].agg(['mean', 'std']).reset_index()
-medmcqa_stats.columns = ['subject', 'mean', 'std']
-
-mmlu_split_acc = mmlu_df.groupby(['subject', 'split'])['result'].mean().reset_index()
-mmlu_split_acc.columns = ['subject', 'split', 'acc']
-mmlu_stats = mmlu_split_acc.groupby('subject')['acc'].agg(['mean', 'std']).reset_index()
-mmlu_stats.columns = ['subject', 'mean', 'std']
-
-medmcqa_avg = medmcqa_stats['mean'].mean()
-mmlu_avg = mmlu_stats['mean'].mean()
-
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 8))
-
-subjects1 = medmcqa_stats['subject']
-means1 = medmcqa_stats['mean']
-stds1 = medmcqa_stats['std']
-ax1.barh(subjects1, means1, xerr=stds1, color='steelblue', alpha=0.8, capsize=3)
-ax1.axvline(x=medmcqa_avg, color='red', linestyle='--', label=f'Average = {medmcqa_avg:.3f}')
-ax1.set_title('MEDMCQA')
-ax1.set_xlabel('Accuracy')
-ax1.set_ylabel('Subject')
-ax1.set_xlim(0, 1)
-ax1.legend()
-
-subjects2 = mmlu_stats['subject']
-means2 = mmlu_stats['mean']
-stds2 = mmlu_stats['std']
-ax2.barh(subjects2, means2, xerr=stds2, color='darkorange', alpha=0.8, capsize=3)
-ax2.axvline(x=mmlu_avg, color='red', linestyle='--', label=f'Average = {mmlu_avg:.3f}')
-ax2.set_title('MMLU')
-ax2.set_xlabel('Accuracy')
-ax2.set_ylabel('Subject')
-ax2.set_xlim(0, 1)
-ax2.legend()
-
-plt.tight_layout()
-plt.savefig('accuracy_by_subject.png', dpi=300)
-plt.show()
-
-# Error by confidence
+# ---- 2. Error by Confidence (KDE for each source + stacked bar overall) ----
 fig, axes = plt.subplots(1, 3, figsize=(18, 6))
 
+# MEDMCQA
 ax = axes[0]
 for outcome, color, label in zip([True, False], ['blue', 'red'], ['Correct', 'Incorrect']):
-    subset = df[(df['source'] == 'MEDMCQA') & (df['result'] == outcome)]['max_prob']
+    subset = medmcqa_df[medmcqa_df['result'] == outcome]['p_top1']
     if not subset.empty:
         sns.kdeplot(subset, ax=ax, color=color, label=label, linewidth=2, fill=True, alpha=0.3)
 ax.set_xlabel('Maximum Predicted Probability')
@@ -111,22 +73,27 @@ ax.set_ylabel('Density')
 ax.set_title('MEDMCQA - Confidence Distribution')
 ax.legend()
 ax.grid(alpha=0.3)
+ax.set_xlim(0, 1)
 
+# MEDQA
 ax = axes[1]
 for outcome, color, label in zip([True, False], ['blue', 'red'], ['Correct', 'Incorrect']):
-    subset = df[(df['source'] == 'MMLU') & (df['result'] == outcome)]['max_prob']
+    subset = medqa_df[medqa_df['result'] == outcome]['p_top1']
     if not subset.empty:
         sns.kdeplot(subset, ax=ax, color=color, label=label, linewidth=2, fill=True, alpha=0.3)
 ax.set_xlabel('Maximum Predicted Probability')
 ax.set_ylabel('Density')
-ax.set_title('MMLU - Confidence Distribution')
+ax.set_title('MEDQA - Confidence Distribution')
 ax.legend()
 ax.grid(alpha=0.3)
+ax.set_xlim(0, 1)
 
+# Overall stacked bar by confidence level
 ax = axes[2]
 crosstab = pd.crosstab(df['confidence'], df['result'], normalize='index') * 100
 crosstab = crosstab.rename(columns={True: 'Correct', False: 'Incorrect'})
-crosstab[['Incorrect', 'Correct']].plot(kind='bar', stacked=True, ax=ax, color=['red', 'blue'], edgecolor='black')
+crosstab[['Incorrect', 'Correct']].plot(kind='bar', stacked=True, ax=ax,
+                                        color=['red', 'blue'], edgecolor='black')
 ax.set_xlabel('Confidence Level')
 ax.set_ylabel('Percentage (%)')
 ax.set_title('Outcome by Confidence Level')
@@ -140,94 +107,73 @@ for i, conf in enumerate(crosstab.index):
 
 plt.tight_layout()
 plt.savefig('confidence_analysis.png', dpi=300, bbox_inches='tight')
-plt.show()
+plt.close()
 
-# Performance across splits
-split_acc = df.groupby(['source', 'split'])['result'].mean().reset_index()
-fig, ax = plt.subplots(figsize=(8, 6))
-sns.lineplot(data=split_acc, x='split', y='result', hue='source', marker='o', ax=ax)
-ax.set_title('Performance Across Splits')
-ax.set_xlabel('Split')
-ax.set_ylabel('Accuracy')
-ax.set_xticks(range(1, 6))
-ax.set_ylim(0, 1)
-for source in split_acc['source'].unique():
-    source_data = split_acc[split_acc['source'] == source]
-    for _, row in source_data.iterrows():
-        ax.text(row['split'], row['result'] + 0.02, f"{row['result']:.2f}", ha='center', va='bottom', fontsize=9)
+# ---- 3. Probability Density of Margin (overall) ----
+fig, ax = plt.subplots(figsize=(10, 6))
+for outcome, color, label in [(True, '#2ecc71', 'Correct'), (False, '#e74c3c', 'Incorrect')]:
+    subset = df[df['result'] == outcome]['margin']
+    if not subset.empty and subset.nunique() > 1:
+        sns.kdeplot(subset, ax=ax, color=color, label=label,
+                    linewidth=2.5, fill=True, alpha=0.25)
+
+ax.set_xlabel('p(top1) − p(answer)')
+ax.set_ylabel('Relative Density')
+ax.set_title('Relative Density of p(top1) − p(answer)')
+ax.set_xlim(0, 1)
+ax.legend(title='Prediction')
+ax.grid(alpha=0.3)
 plt.tight_layout()
-plt.savefig('performance_across_splits.png', dpi=300, bbox_inches='tight')
-plt.show()
+plt.savefig('margin_density.png', dpi=300, bbox_inches='tight')
+plt.close()
 
-# Time graph
-medmcqa_df = df[df['source'] == 'MEDMCQA']
-mmlu_df = df[df['source'] == 'MMLU']
+# Top‑k accuracy table (Top‑1 to Top‑5)
+def compute_topk_ranks(df, prob_cols):
+    probs = df[prob_cols].values
+    answers = df['answer'].values
+    ranks = []
+    for i in range(len(probs)):
+        sorted_idx = np.argsort(probs[i])[::-1]  # descending
+        rank = np.where(sorted_idx == answers[i])[0][0] + 1
+        ranks.append(rank)
+    return ranks
 
-medmcqa_time_stats = medmcqa_df.groupby('subject')['time'].agg(['mean', 'std']).reset_index()
-medmcqa_time_stats.columns = ['subject', 'mean', 'std']
-mmlu_time_stats = mmlu_df.groupby('subject')['time'].agg(['mean', 'std']).reset_index()
-mmlu_time_stats.columns = ['subject', 'mean', 'std']
+# MCQA (4 options)
+mcqa_ranks = compute_topk_ranks(mcqa_df, ['probA','probB','probC','probD'])
+mcqa_top1 = (np.array(mcqa_ranks) <= 1).mean() * 100
+mcqa_top2 = (np.array(mcqa_ranks) <= 2).mean() * 100
+mcqa_top3 = (np.array(mcqa_ranks) <= 3).mean() * 100
+mcqa_top4 = (np.array(mcqa_ranks) <= 4).mean() * 100
+mcqa_top5 = (np.array(mcqa_ranks) <= 5).mean() * 100  # always 100%
+mcqa_time = mcqa_df['time'].mean()
 
-medmcqa_avg = medmcqa_time_stats['mean'].mean()
-mmlu_avg = mmlu_time_stats['mean'].mean()
+# QA (5 options)
+qa_ranks = compute_topk_ranks(qa_df, ['probA','probB','probC','probD','probE'])
+qa_top1 = (np.array(qa_ranks) <= 1).mean() * 100
+qa_top2 = (np.array(qa_ranks) <= 2).mean() * 100
+qa_top3 = (np.array(qa_ranks) <= 3).mean() * 100
+qa_top4 = (np.array(qa_ranks) <= 4).mean() * 100
+qa_top5 = (np.array(qa_ranks) <= 5).mean() * 100  # always 100%
+qa_time = qa_df['time'].mean()
 
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 8))
+# Build table with 7 columns
+table_data = [
+    ['MCQA', f"{mcqa_top1:.2f}", f"{mcqa_top2:.2f}", f"{mcqa_top3:.2f}", 
+     f"{mcqa_top4:.2f}", f"{mcqa_top5:.2f}", f"{mcqa_time:.2f}"],
+    ['QA',   f"{qa_top1:.2f}",   f"{qa_top2:.2f}",   f"{qa_top3:.2f}",
+     f"{qa_top4:.2f}",   f"{qa_top5:.2f}",   f"{qa_time:.2f}"]
+]
+table_df = pd.DataFrame(table_data, 
+                        columns=['Dataset', 'Top-1', 'Top-2', 'Top-3', 'Top-4', 'Top-5', 'Avg Time (s)'])
 
-subjects1 = medmcqa_time_stats['subject']
-means1 = medmcqa_time_stats['mean']
-stds1 = medmcqa_time_stats['std']
-ax1.barh(subjects1, means1, xerr=stds1, color='steelblue', alpha=0.8, capsize=3)
-ax1.axvline(x=medmcqa_avg, color='red', linestyle='--', label=f'Average = {medmcqa_avg:.3f}s')
-ax1.set_title('MEDMCQA')
-ax1.set_xlabel('Time (seconds)')
-ax1.set_ylabel('Subject')
-ax1.legend()
-
-subjects2 = mmlu_time_stats['subject']
-means2 = mmlu_time_stats['mean']
-stds2 = mmlu_time_stats['std']
-ax2.barh(subjects2, means2, xerr=stds2, color='darkorange', alpha=0.8, capsize=3)
-ax2.axvline(x=mmlu_avg, color='red', linestyle='--', label=f'Average = {mmlu_avg:.3f}s')
-ax2.set_title('MMLU')
-ax2.set_xlabel('Time (seconds)')
-ax2.set_ylabel('Subject')
-ax2.legend()
-
-plt.tight_layout()
-plt.savefig('time_by_subject.png', dpi=300)
-plt.show()
-
-# Number of uncertain options
-df['result'] = df['result'].astype(bool)
-df['num_within'] = (df[['probA', 'probB', 'probC', 'probD']] >= (df['max_prob'] - 0.2).values[:, None]).sum(axis=1)
-
-grouped = (df.groupby(['num_within', 'result']).size().reset_index(name='count'))
-grouped['percentage'] = (grouped.groupby('num_within')['count'].transform(lambda x: x / x.sum() * 100))
-
-pivot = (grouped.pivot(index='num_within', columns='result', values='percentage').fillna(0).reindex(index=range(1, 5), fill_value=0))
-pivot = pivot.rename(columns={False: 'Incorrect', True: 'Correct'})
-fig, ax = plt.subplots(figsize=(8, 6))
-pivot[['Incorrect', 'Correct']].plot(
-    kind='bar',
-    stacked=True,
-    ax=ax,
-    color=['red', 'blue'],
-    edgecolor='black'
-)
-
-ax.set_xlabel('Number of options within 0.2 of maximum probability')
-ax.set_ylabel('Percentage (%)')
-ax.set_title('Outcome by Number of Close Options')
-ax.legend(title='Outcome')
-ax.axhline(y=50, color='gray', linestyle='--', alpha=0.7)
-ax.grid(axis='y', alpha=0.3)
-ax.set_ylim(0, 105)
-ax.set_xticklabels([str(i) for i in range(1, 5)], rotation=0)
-
-for i, n in enumerate(range(1, 5)):
-    total = len(df[df['num_within'] == n])
-    ax.text(i, 102, f'n={total}', ha='center', va='bottom', fontsize=9)
-
-plt.tight_layout()
-plt.savefig("uncertain_options_analysis.png", dpi=300, bbox_inches='tight')
-plt.show()
+fig, ax = plt.subplots(figsize=(10, 2.5))  # slightly wider for 7 columns
+ax.axis('tight')
+ax.axis('off')
+table = ax.table(cellText=table_df.values, colLabels=table_df.columns,
+                 cellLoc='center', loc='center',
+                 colColours=['#f0f0f0'] * len(table_df.columns))
+table.auto_set_font_size(False)
+table.set_fontsize(11)
+table.scale(1.8, 2)
+plt.savefig('topk_accuracy_table.png', bbox_inches='tight', dpi=300)
+plt.close()

@@ -1,7 +1,7 @@
 
 """
-wget https://ftp.ncbi.nlm.nih.gov/pub/litarch/3d/12/statpearls_NBK430685.tar.gz -P ./dataset-processing/statpearls/raw
-tar -xzvf ./dataset-processing/statpearls/raw/statpearls_NBK430685.tar.gz -C ./dataset-processing/statpearls/raw
+wget https://ftp.ncbi.nlm.nih.gov/pub/litarch/3d/12/statpearls_NBK430685.tar.gz -P ./milvus/statpearls/raw
+tar -xzvf ./milvus/statpearls/raw/statpearls_NBK430685.tar.gz -C ./milvus/statpearls/raw
 """
 
 import os
@@ -99,8 +99,8 @@ def extract(fpath):
     return saved_text
 
 if __name__ == "__main__":
-    raw_dir = "dataset-processing/statpearls/raw/statpearls_NBK430685"
-    chunk_dir = "dataset-processing/statpearls/chunk"
+    raw_dir = "milvus/statpearls/raw/statpearls_NBK430685"
+    chunk_dir = "milvus/statpearls/chunk"
     fnames = sorted([fname for fname in os.listdir(raw_dir) if fname.endswith(".nxml")])
     os.makedirs(chunk_dir, exist_ok=True)
     for fname in tqdm.tqdm(fnames):
