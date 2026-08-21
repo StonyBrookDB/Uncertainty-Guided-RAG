@@ -29,7 +29,12 @@ option_tokens = {
 
 errors = 0
 USE_RERANKER = True  # flip to True to rerank retrieved chunks before keeping the top 5
+
+# --- CoT fallback settings ---
+MARGIN_THRESHOLD = 0.15   # if (top1_prob - top2_prob) < this, re-run with CoT reasoning
+COT_MAX_NEW_TOKENS = 300  # budget for the free-form reasoning generation
 # endregion
+
 
 def _run_model(messages):
     inputs = tokenizer.apply_chat_template(
@@ -61,6 +66,67 @@ def _check_confident(inputs, last_token_logits):
     return True
 
 
+def _option_probs(last_token_logits, letters):
+    """Softmax over just the option-letter logits, in `letters` order."""
+    option_logits = [last_token_logits[option_tokens[letter]].item() for letter in letters]
+    probs = torch.softmax(torch.tensor(option_logits), dim=0).tolist()
+    return probs
+
+
+def _margin(probs):
+    """Difference between the top-1 and top-2 probabilities."""
+    sorted_probs = sorted(probs, reverse=True)
+    return sorted_probs[0] - sorted_probs[1]
+
+
+def _run_cot(context, question_block, letters, system_hint):
+    """
+    Two-pass CoT fallback:
+      1) Ask the model to reason step-by-step over the context/question (free generation).
+      2) Feed that reasoning back in and force a single constrained-letter answer,
+         reusing the same next-token-logit approach as the main pass so the
+         returned probs stay comparable to the first pass.
+
+    Returns (last_token_logits, reasoning_text, elapsed_seconds).
+    """
+    start = t.time()
+
+    user_content = f"""Context:
+{context}
+Question: {question_block}
+"""
+
+    reasoning_messages = [
+        {"role": "system", "content": f"Use the provided context and step-by-step clinical reasoning to work through this question. {system_hint} Think through the relevant facts, then reason toward an answer."},
+        {"role": "user", "content": user_content}
+    ]
+
+    cot_inputs = tokenizer.apply_chat_template(
+        reasoning_messages, tokenize=True, add_generation_prompt=True, return_tensors="pt"
+    ).to("cuda")
+
+    with torch.no_grad():
+        generated = model.generate(
+            **cot_inputs,
+            max_new_tokens=COT_MAX_NEW_TOKENS,
+            do_sample=False,
+        )
+    reasoning_text = tokenizer.decode(
+        generated[0][cot_inputs.shape[-1]:], skip_special_tokens=True
+    )
+
+    letters_str = "/".join(letters)
+    final_messages = reasoning_messages + [
+        {"role": "assistant", "content": reasoning_text},
+        {"role": "user", "content": f"Based on the reasoning above, output your final answer as a single letter ({letters_str}). No explanation.\nAnswer: "}
+    ]
+
+    final_inputs, last_token_logits, _ = _run_model(final_messages)
+    _check_confident(final_inputs, last_token_logits)
+
+    return last_token_logits, reasoning_text, t.time() - start
+
+
 def get_context(prompt, use_reranker=USE_RERANKER):
     start = t.time()
     query_embedding = embedding_model.encode(prompt, normalize_embeddings=True).tolist()
@@ -89,81 +155,86 @@ def get_context(prompt, use_reranker=USE_RERANKER):
         for r, score in zip(results, rerank_scores):
             r["rerank_score"] = score
         results = sorted(results, key=lambda x: x["rerank_score"], reverse=True)[:5]
-    
+
     return "\n\n".join([f"{r['content']}" for r in results]), results, t.time() - start
 
 
-# returns [[probA, probB, probC, probD], time, confident flag, search_results]
+# returns [[probA, probB, probC, probD], time, confident flag, search_results, used_cot flag]
 def eval_medmcqa(q):
-    context, search_results, elapsed_retrieval = get_context(f"""Question: {q["question"]}
+    letters = ["A", "B", "C", "D"]
+    question_block = f"""{q["question"]}
     A) {q["a"]}
     B) {q["b"]}
     C) {q["c"]}
-    D) {q["d"]}""", use_reranker=USE_RERANKER)
+    D) {q["d"]}"""
+
+    context, search_results, elapsed_retrieval = get_context(f"Question: {question_block}", use_reranker=USE_RERANKER)
 
     messages = [
         {"role": "system", "content": "Use provided context and reasoning to guide your answer. Output your answer as a single letter (A, B, C, D). No explanation"},
         {"role": "user", "content": f"""Context: 
 {context}
-Question: {q["question"]}
-    A) {q["a"]}
-    B) {q["b"]}
-    C) {q["c"]}
-    D) {q["d"]}
+Question: {question_block}
 Answer: """}
     ]
 
     inputs, last_token_logits, elapsed_model = _run_model(messages)
     confident = _check_confident(inputs, last_token_logits)
 
-    option_logits = [
-        last_token_logits[option_tokens["A"]].item(),
-        last_token_logits[option_tokens["B"]].item(),
-        last_token_logits[option_tokens["C"]].item(),
-        last_token_logits[option_tokens["D"]].item(),
-    ]
+    probs = _option_probs(last_token_logits, letters)
+    total_time = elapsed_retrieval + elapsed_model
+    used_cot = False
 
-    probs = torch.softmax(torch.tensor(option_logits), dim=0).tolist()
-    return [probs, elapsed_retrieval + elapsed_model, confident, search_results]
+    if _margin(probs) < MARGIN_THRESHOLD:
+        used_cot = True
+        last_token_logits, _reasoning_text, elapsed_cot = _run_cot(
+            context, question_block, letters,
+            system_hint="Options are A, B, C, D."
+        )
+        probs = _option_probs(last_token_logits, letters)
+        total_time += elapsed_cot
+
+    return [probs, total_time, confident, search_results, used_cot]
 
 
-# returns [[probA, probB, probC, probD, probE], time, confident flag, search_results]
+# returns [[probA, probB, probC, probD, probE], time, confident flag, search_results, used_cot flag]
 def eval_medqa(q):
-    start = t.time()
-    context, search_results, elapsed_retrieval = get_context(f"""Question: {q["question"]}
+    letters = ["A", "B", "C", "D", "E"]
+    question_block = f"""{q["question"]}
     A) {q["a"]}
     B) {q["b"]}
     C) {q["c"]}
     D) {q["d"]}
-    E) {q["e"]}""", use_reranker=USE_RERANKER)
-    end = t.time()
+    E) {q["e"]}"""
+
+    context, search_results, elapsed_retrieval = get_context(f"Question: {question_block}", use_reranker=USE_RERANKER)
 
     messages = [
         {"role": "system", "content": "Use provided context and reasoning to guide your answer. Output your answer as a single letter (A, B, C, D, E). No explanation"},
         {"role": "user", "content": f"""Context: 
 {context}
-Question: {q["question"]}
-    A) {q["a"]}
-    B) {q["b"]}
-    C) {q["c"]}
-    D) {q["d"]}
-    E) {q["e"]}
+Question: {question_block}
 Answer: """}
     ]
 
     inputs, last_token_logits, elapsed_model = _run_model(messages)
     confident = _check_confident(inputs, last_token_logits)
 
-    option_logits = [
-        last_token_logits[option_tokens["A"]].item(),
-        last_token_logits[option_tokens["B"]].item(),
-        last_token_logits[option_tokens["C"]].item(),
-        last_token_logits[option_tokens["D"]].item(),
-        last_token_logits[option_tokens["E"]].item(),
-    ]
+    probs = _option_probs(last_token_logits, letters)
+    total_time = elapsed_retrieval + elapsed_model
+    used_cot = False
 
-    probs = torch.softmax(torch.tensor(option_logits), dim=0).tolist()
-    return [probs, elapsed_retrieval + elapsed_model, confident, search_results]
+    if _margin(probs) < MARGIN_THRESHOLD:
+        used_cot = True
+        last_token_logits, _reasoning_text, elapsed_cot = _run_cot(
+            context, question_block, letters,
+            system_hint="Options are A, B, C, D, E."
+        )
+        probs = _option_probs(last_token_logits, letters)
+        total_time += elapsed_cot
+
+    return [probs, total_time, confident, search_results, used_cot]
+
 
 def write(res, OUT_FILE):
     df = pd.DataFrame(res)
@@ -186,70 +257,13 @@ for _ in range(5):
     _run_model(warmup_messages)
 torch.cuda.synchronize()
 
-# # MEDMCQA Test
-# print("Evaluating MedMCQA test")
-# results = []
-# df = pd.read_csv("question-set/medmcqa_20.csv")
-# for i, q in enumerate(df.to_dict("records")):
-#     probs, time, confident, search_results = eval_medmcqa(q)
-#     results.append({
-#         "id": q["id"],
-#         "source": q["source"],
-#         "probA": probs[0],
-#         "probB": probs[1],
-#         "probC": probs[2],
-#         "probD": probs[3],
-#         "answer": q["answer"],
-#         "time": time,
-#         "error": not confident,
-#         "sources": [r["source"] for r in search_results],
-#         "ids": [r["id"] for r in search_results],
-#         "similarity": [r["score"] for r in search_results]
-#     })
-#     print(results[-1])
-#     if i % 100 == 0 and i != 0:
-#         write(results, "medmcqa_results.csv")
-#         results.clear()
-#
-# if results:
-#     write(results, "medmcqa_results.csv")
-#     results.clear()
-
-# # MEDMCQA
-# print("Evaluating MedMCQA test")
-# results = []
-# df = pd.read_csv("question-set/medmcqa_1000.csv")
-# for i, q in enumerate(df.to_dict("records")):
-#     probs, time, confident, search_results = eval_medmcqa(q)
-#     results.append({
-#         "id": q["id"],
-#         "source": q["source"],
-#         "probA": probs[0],
-#         "probB": probs[1],
-#         "probC": probs[2],
-#         "probD": probs[3],
-#         "answer": q["answer"],
-#         "time": time,
-#         "error": not confident,
-#         "sources": [r["source"] for r in search_results],
-#         "ids": [r["id"] for r in search_results],
-#         "similarity": [r["score"] for r in search_results]
-#     })
-#     if i % 100 == 0 and i != 0:
-#         write(results, "medmcqa_results.csv")
-#         results.clear()
-
-# if results:
-#     write(results, "medmcqa_results.csv")
-#     results.clear()
-
 # MEDQA
 print("Evaluating MedQA test")
 results = []
 df = pd.read_csv("question-set/medqa_1273.csv")
 for i, q in enumerate(df.to_dict("records")):
     if i <= 100: continue
-    probs, time, confident, search_results = eval_medqa(q)
+    probs, time, confident, search_results, used_cot = eval_medqa(q)
     results.append({
         "id": q["id"],
         "source": q["source"],
@@ -261,6 +275,7 @@ for i, q in enumerate(df.to_dict("records")):
         "answer": q["answer"],
         "time": time,
         "error": not confident,
+        "used_cot": used_cot,
         "sources": [r["source"] for r in search_results],
         "ids": [r["id"] for r in search_results],
         "similarity": [r["score"] for r in search_results]

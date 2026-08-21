@@ -13,6 +13,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 model_name = "meta-llama/Llama-3.1-8B-Instruct"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForCausalLM.from_pretrained(model_name, device_map="cuda")
+model = torch.compile(model, mode="reduce-overhead")
 model.eval()
 
 option_tokens = {
@@ -31,9 +32,11 @@ def _run_model(messages):
         messages, tokenize=True, add_generation_prompt=True, return_tensors="pt"
     ).to("cuda")
 
+    torch.cuda.synchronize()
     start = t.time()
     with torch.no_grad():
         outputs = model(**inputs, return_dict=True)
+    torch.cuda.synchronize()
     end = t.time()
 
     last_token_logits = outputs.logits[0, -1, :]
