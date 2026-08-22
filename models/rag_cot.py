@@ -1,23 +1,30 @@
 """
-Benchmark: 57.32/68.18 MedMCQA/MedQA
-https://openreview.net/pdf?id=ri3Si3GBOm
+Benchmark reference: https://openreview.net/pdf?id=ri3Si3GBOm
 
-9 errors, not enough tokens for CoT
+22 errors, not enough tokens for CoT
 """
 
 # region imports, models, constants
 import os
-import re
 import torch
 import pandas as pd
 import time as t
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from pymilvus import MilvusClient
+from sentence_transformers import SentenceTransformer, CrossEncoder
 
 model_name = "meta-llama/Llama-3.1-8B-Instruct"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForCausalLM.from_pretrained(model_name, device_map="cuda")
 model = torch.compile(model, mode="reduce-overhead")
 model.eval()
+
+embedding_model = SentenceTransformer("BAAI/bge-base-en-v1.5", trust_remote_code=True, device="cuda")
+reranker = CrossEncoder("BAAI/bge-reranker-v2-m3", device="cuda")
+
+client = MilvusClient(uri="http://localhost:19530")
+client.load_collection("MedRAG_combined_collection")
+COLLECTION = "MedRAG_combined_collection"
 
 option_tokens = {
     "A": tokenizer.encode("A", add_special_tokens=False)[0],
@@ -30,7 +37,40 @@ option_tokens = {
 MAX_NEW_TOKENS = 512
 
 errors = 0
+USE_RERANKER = True
 # endregion
+
+
+def get_context(prompt, use_reranker=USE_RERANKER):
+    start = t.time()
+    query_embedding = embedding_model.encode(prompt, normalize_embeddings=True).tolist()
+    search_limit = 15 if use_reranker else 5
+
+    search = client.search(
+        collection_name=COLLECTION,
+        data=[query_embedding],
+        limit=search_limit,
+        output_fields=["id", "source", "content"],
+        search_params={"metric_type": "COSINE", "params": {}}
+    )
+
+    results = []
+    for r in search[0]:
+        results.append({
+            "score": r["distance"],
+            "id": r["id"],
+            "source": r["entity"].get("source"),
+            "content": r["entity"].get("content")
+        })
+
+    if use_reranker:
+        pairs = [(prompt, r["content"]) for r in results]
+        rerank_scores = reranker.predict(pairs, show_progress_bar=False, batch_size=search_limit)
+        for r, score in zip(results, rerank_scores):
+            r["rerank_score"] = score
+        results = sorted(results, key=lambda x: x["rerank_score"], reverse=True)[:5]
+
+    return "\n\n".join([f"{r['content']}" for r in results]), results, t.time() - start
 
 
 def _run_model_cot(messages, max_new_tokens=MAX_NEW_TOKENS):
@@ -80,85 +120,100 @@ def _extract_answer_letter_and_logits(generated_ids, scores):
 
 def _probs_from_logits(logits, valid_letters):
     option_logits = [logits[option_tokens[letter]].item() for letter in valid_letters]
-    probs = torch.softmax(torch.tensor(option_logits), dim=0).tolist()
-    return probs
+    return torch.softmax(torch.tensor(option_logits), dim=0).tolist()
 
 
-# returns [[probA, probB, probC, probD], time, confident flag, cot_text, answer_letter]
+# returns [probs, time, confident flag, search_results]
 def eval_medmcqa(q):
+    letters = ["A", "B", "C", "D"]
+    question_block = f"""{q["question"]}
+    A) {q["a"]}
+    B) {q["b"]}
+    C) {q["c"]}
+    D) {q["d"]}"""
+
+    context, search_results, elapsed_retrieval = get_context(f"Question: {question_block}", use_reranker=USE_RERANKER)
+
     messages = [
         {
             "role": "system",
             "content": (
-                "You are answering a multiple-choice medical question. "
-                "Think through the question step by step, briefly explaining your "
-                "reasoning. After your reasoning, on a new final line, give your "
-                "answer in EXACTLY this format: 'Answer: <letter>' where <letter> "
-                "is one of A, B, C, or D. Do not include anything after that line."
+                "You are answering a multiple-choice medical question using the provided "
+                "context. Think through the question step by step, briefly explaining your "
+                "reasoning using the context and your own medical knowledge. After your "
+                "reasoning, on a new final line, give your answer in EXACTLY this format: "
+                "'Answer: <letter>' where <letter> is one of A, B, C, or D. Do not include "
+                "anything after that line."
             ),
         },
         {
             "role": "user",
-            "content": f"""Question: {q["question"]}
-    A) {q["a"]}
-    B) {q["b"]}
-    C) {q["c"]}
-    D) {q["d"]}
+            "content": f"""Context:
+{context}
+Question: {question_block}
 
 Think step by step, then finish with 'Answer: <letter>'.""",
         },
     ]
 
-    generated_ids, generated_text, scores, elapsed = _run_model_cot(messages)
+    generated_ids, generated_text, scores, elapsed_model = _run_model_cot(messages)
     answer_letter, answer_logits = _extract_answer_letter_and_logits(generated_ids, scores)
 
     confident = answer_letter is not None
     if confident:
-        probs = _probs_from_logits(answer_logits, ["A", "B", "C", "D"])
+        probs = _probs_from_logits(answer_logits, letters)
     else:
         print(f"Warning: could not parse an answer letter from generated text:\n{generated_text}")
-        probs = [0.25, 0.25, 0.25, 0.25]
+        probs = [1.0 / len(letters)] * len(letters)
 
-    return [probs, elapsed, confident]
+    return [probs, elapsed_retrieval + elapsed_model, confident, search_results]
 
 
-# returns [[probA, probB, probC, probD, probE], time, confident flag, cot_text, answer_letter]
+# returns [probs, time, confident flag, search_results]
 def eval_medqa(q):
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are answering a multiple-choice medical question. "
-                "Think through the question step by step, briefly explaining your "
-                "reasoning. After your reasoning, on a new final line, give your "
-                "answer in EXACTLY this format: 'Answer: <letter>' where <letter> "
-                "is one of A, B, C, D, or E. Do not include anything after that line."
-            ),
-        },
-        {
-            "role": "user",
-            "content": f"""Question: {q["question"]}
+    letters = ["A", "B", "C", "D", "E"]
+    question_block = f"""{q["question"]}
     A) {q["a"]}
     B) {q["b"]}
     C) {q["c"]}
     D) {q["d"]}
-    E) {q["e"]}
+    E) {q["e"]}"""
+
+    context, search_results, elapsed_retrieval = get_context(f"Question: {question_block}", use_reranker=USE_RERANKER)
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are answering a multiple-choice medical question using the provided "
+                "context. Think through the question step by step, briefly explaining your "
+                "reasoning using the context and your own medical knowledge. After your "
+                "reasoning, on a new final line, give your answer in EXACTLY this format: "
+                "'Answer: <letter>' where <letter> is one of A, B, C, D, or E. Do not include "
+                "anything after that line."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"""Context:
+{context}
+Question: {question_block}
 
 Think step by step, then finish with 'Answer: <letter>'.""",
         },
     ]
 
-    generated_ids, generated_text, scores, elapsed = _run_model_cot(messages)
+    generated_ids, generated_text, scores, elapsed_model = _run_model_cot(messages)
     answer_letter, answer_logits = _extract_answer_letter_and_logits(generated_ids, scores)
 
     confident = answer_letter is not None
     if confident:
-        probs = _probs_from_logits(answer_logits, ["A", "B", "C", "D", "E"])
+        probs = _probs_from_logits(answer_logits, letters)
     else:
         print(f"Warning: could not parse an answer letter from generated text:\n{generated_text}")
-        probs = [0.2, 0.2, 0.2, 0.2, 0.2]
+        probs = [1.0 / len(letters)] * len(letters)
 
-    return [probs, elapsed, confident]
+    return [probs, elapsed_retrieval + elapsed_model, confident, search_results]
 
 
 def write(res, OUT_FILE):
@@ -172,10 +227,7 @@ print("Warming up model")
 warmup_messages = [
     {
         "role": "system",
-        "content": (
-            "You are answering a multiple-choice question. Think step by step, "
-            "then finish with 'Answer: <letter>'."
-        ),
+        "content": "You are answering a multiple-choice question. Think step by step, then finish with 'Answer: <letter>'.",
     },
     {
         "role": "user",
@@ -197,7 +249,7 @@ print("Evaluating MedMCQA test")
 results = []
 df = pd.read_csv("question-set/medmcqa_1000.csv")
 for i, q in enumerate(df.to_dict("records")):
-    probs, time_taken, confident = eval_medmcqa(q)
+    probs, time_taken, confident, search_results = eval_medmcqa(q)
     results.append({
         "id": q["id"],
         "source": q["source"],
@@ -208,6 +260,9 @@ for i, q in enumerate(df.to_dict("records")):
         "answer": q["answer"],
         "time": time_taken,
         "error": not confident,
+        "sources": [r["source"] for r in search_results],
+        "ids": [r["id"] for r in search_results],
+        "similarity": [r["score"] for r in search_results]
     })
     if i % 100 == 0 and i != 0:
         write(results, "medmcqa_results.csv")
@@ -222,7 +277,7 @@ print("Evaluating MedQA test")
 results = []
 df = pd.read_csv("question-set/medqa_1273.csv")
 for i, q in enumerate(df.to_dict("records")):
-    probs, time_taken, confident = eval_medqa(q)
+    probs, time_taken, confident, search_results = eval_medqa(q)
     results.append({
         "id": q["id"],
         "source": q["source"],
@@ -234,6 +289,9 @@ for i, q in enumerate(df.to_dict("records")):
         "answer": q["answer"],
         "time": time_taken,
         "error": not confident,
+        "sources": [r["source"] for r in search_results],
+        "ids": [r["id"] for r in search_results],
+        "similarity": [r["score"] for r in search_results]
     })
     if i % 100 == 0 and i != 0:
         write(results, "medqa_results.csv")

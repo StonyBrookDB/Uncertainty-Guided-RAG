@@ -215,33 +215,33 @@ torch.cuda.synchronize()
 #     write(results, "medmcqa_results.csv")
 #     results.clear()
 
-# # MEDMCQA
-# print("Evaluating MedMCQA test")
-# results = []
-# df = pd.read_csv("question-set/medmcqa_1000.csv")
-# for i, q in enumerate(df.to_dict("records")):
-#     probs, time, confident, search_results = eval_medmcqa(q)
-#     results.append({
-#         "id": q["id"],
-#         "source": q["source"],
-#         "probA": probs[0],
-#         "probB": probs[1],
-#         "probC": probs[2],
-#         "probD": probs[3],
-#         "answer": q["answer"],
-#         "time": time,
-#         "error": not confident,
-#         "sources": [r["source"] for r in search_results],
-#         "ids": [r["id"] for r in search_results],
-#         "similarity": [r["score"] for r in search_results]
-#     })
-#     if i % 100 == 0 and i != 0:
-#         write(results, "medmcqa_results.csv")
-#         results.clear()
+# MEDMCQA
+print("Evaluating MedMCQA test")
+results = []
+df = pd.read_csv("question-set/medmcqa_1000.csv")
+for i, q in enumerate(df.to_dict("records")):
+    probs, time, confident, search_results = eval_medmcqa(q)
+    results.append({
+        "id": q["id"],
+        "source": q["source"],
+        "probA": probs[0],
+        "probB": probs[1],
+        "probC": probs[2],
+        "probD": probs[3],
+        "answer": q["answer"],
+        "time": time,
+        "error": not confident,
+        "sources": [r["source"] for r in search_results],
+        "ids": [r["id"] for r in search_results],
+        "similarity": [r["score"] for r in search_results]
+    })
+    if i % 100 == 0 and i != 0:
+        write(results, "medmcqa_results.csv")
+        results.clear()
 
-# if results:
-#     write(results, "medmcqa_results.csv")
-#     results.clear()
+if results:
+    write(results, "medmcqa_results.csv")
+    results.clear()
 
 # MEDQA
 print("Evaluating MedQA test")

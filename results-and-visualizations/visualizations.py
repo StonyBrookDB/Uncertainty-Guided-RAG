@@ -9,8 +9,8 @@ import numpy as np
 RAG_VISUALIZATIONS = True
 
 # Read both dataframes
-mcqa_df = pd.read_csv("medmcqa_results.csv")   # 4 options (probA‑D)
-qa_df   = pd.read_csv("medqa_results.csv")     # 5 options (probA‑E)
+mcqa_df = pd.read_csv("medmcqa_results_0.1.csv")   # 4 options (probA‑D)
+qa_df   = pd.read_csv("medqa_results_0.1.csv")     # 5 options (probA‑E)
 
 # Add missing probE column to the 4‑option dataframe
 mcqa_df['probE'] = 0.0
